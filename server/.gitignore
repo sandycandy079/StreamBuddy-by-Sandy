@@ -1,0 +1,12 @@
+# Dependencies — reinstalled automatically by Railway
+node_modules/
+
+# Database files — contain your customers' license keys, never share these
+db/
+
+# Environment file — contains your secret keys
+.env
+
+# OS junk
+.DS_Store
+Thumbs.db
