@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NUMB Chatbot — Admin</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #080c14;
+    --surface: #0e1420;
+    --surface2: #151d2e;
+    --border: rgba(99,179,237,0.12);
+    --text: #e8f0fe;
+    --muted: #5a7090;
+    --accent: #fe2c55;
+    --cyan: #25f4ee;
+    --green: #00e676;
+    --yellow: #ffb300;
+    --mono: 'Space Mono', monospace;
+    --sans: 'DM Sans', sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: var(--sans); background: var(--bg); color: var(--text); min-height: 100vh; }
+
+  /* Login */
+  #loginScreen { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: var(--bg); z-index: 999; }
+  .login-box { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 40px; width: 360px; text-align: center; }
+  .login-box h1 { font-family: var(--mono); font-size: 20px; color: var(--cyan); margin-bottom: 6px; }
+  .login-box p { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+  input { width: 100%; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; color: var(--text); font-size: 14px; font-family: var(--sans); outline: none; margin-bottom: 12px; }
+  input:focus { border-color: rgba(37,244,238,0.4); }
+  .btn { padding: 10px 20px; border-radius: 8px; border: none; font-size: 14px; font-weight: 600; cursor: pointer; font-family: var(--sans); transition: all 0.2s; }
+  .btn-primary { background: var(--accent); color: #fff; width: 100%; }
+  .btn-primary:hover { opacity: 0.85; }
+  .btn-sm { padding: 5px 12px; font-size: 12px; border-radius: 6px; }
+  .btn-green { background: rgba(0,230,118,0.12); color: var(--green); border: 1px solid rgba(0,230,118,0.25); }
+  .btn-red { background: rgba(254,44,85,0.1); color: var(--accent); border: 1px solid rgba(254,44,85,0.2); }
+  .btn-yellow { background: rgba(255,179,0,0.1); color: var(--yellow); border: 1px solid rgba(255,179,0,0.2); }
+  .btn-cyan { background: rgba(37,244,238,0.08); color: var(--cyan); border: 1px solid rgba(37,244,238,0.2); }
+
+  /* Layout */
+  header { padding: 16px 28px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; background: var(--surface); }
+  .logo { font-family: var(--mono); font-size: 16px; color: var(--cyan); }
+  .logo span { color: var(--accent); }
+  .main { padding: 28px; max-width: 1100px; margin: 0 auto; }
+
+  /* Stats bar */
+  .stats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 28px; }
+  .stat-box { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; }
+  .stat-box .num { font-family: var(--mono); font-size: 28px; font-weight: 700; }
+  .stat-box .lbl { font-size: 12px; color: var(--muted); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.08em; }
+  .stat-box.c1 .num { color: var(--cyan); }
+  .stat-box.c2 .num { color: var(--green); }
+  .stat-box.c3 .num { color: var(--accent); }
+  .stat-box.c4 .num { color: var(--yellow); }
+
+  /* Panel */
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; margin-bottom: 24px; }
+  .panel-header { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+  .panel-header h2 { font-size: 15px; font-weight: 600; }
+  .panel-body { padding: 20px; }
+
+  /* Create form */
+  .create-form { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+  .create-form .field { display: flex; flex-direction: column; gap: 5px; }
+  .create-form label { font-size: 12px; color: var(--muted); }
+  .create-form input, .create-form select { margin-bottom: 0; width: auto; min-width: 160px; }
+  select { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; color: var(--text); font-size: 14px; font-family: var(--sans); outline: none; }
+
+  /* Table */
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; padding: 10px 14px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; border-bottom: 1px solid var(--border); font-weight: 600; }
+  td { padding: 12px 14px; border-bottom: 1px solid rgba(255,255,255,0.04); vertical-align: middle; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(255,255,255,0.02); }
+  .key-mono { font-family: var(--mono); font-size: 12px; color: var(--cyan); letter-spacing: 0.04em; }
+  .badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+  .badge-active { background: rgba(0,230,118,0.1); color: var(--green); border: 1px solid rgba(0,230,118,0.2); }
+  .badge-revoked { background: rgba(254,44,85,0.1); color: var(--accent); border: 1px solid rgba(254,44,85,0.2); }
+  .badge-expired { background: rgba(255,179,0,0.1); color: var(--yellow); border: 1px solid rgba(255,179,0,0.2); }
+  .badge-lifetime { background: rgba(37,244,238,0.08); color: var(--cyan); border: 1px solid rgba(37,244,238,0.2); }
+  .actions { display: flex; gap: 6px; }
+  .copy-key { cursor: pointer; opacity: 0.6; transition: opacity 0.2s; font-size: 13px; }
+  .copy-key:hover { opacity: 1; }
+
+  /* Generated key toast */
+  #newKeyBox { display: none; background: rgba(0,230,118,0.08); border: 1px solid rgba(0,230,118,0.25); border-radius: 10px; padding: 14px 18px; margin-bottom: 16px; }
+  #newKeyBox .key-text { font-family: var(--mono); font-size: 18px; color: var(--green); letter-spacing: 0.06em; }
+  #newKeyBox p { font-size: 13px; color: var(--muted); margin-top: 6px; }
+
+  .empty-state { text-align: center; padding: 40px; color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+
+<!-- Login Screen -->
+<div id="loginScreen">
+  <div class="login-box">
+    <h1>NUMB<span>BOT</span></h1>
+    <p>Admin Panel — Enter your password</p>
+    <input type="password" id="pwdInput" placeholder="Admin password" onkeydown="if(event.key==='Enter')login()" />
+    <button class="btn btn-primary" onclick="login()">Login</button>
+    <p id="loginErr" style="color:var(--accent);font-size:13px;margin-top:10px;display:none">Wrong password</p>
+  </div>
+</div>
+
+<header>
+  <div class="logo">NUMB<span>BOT</span> — Admin</div>
+  <div style="font-size:13px;color:var(--muted)" id="headerStats">Loading...</div>
+</header>
+
+<div class="main">
+
+  <!-- Stats -->
+  <div class="stats-row">
+    <div class="stat-box c1"><div class="num" id="st_total">—</div><div class="lbl">Total Keys</div></div>
+    <div class="stat-box c2"><div class="num" id="st_active">—</div><div class="lbl">Active</div></div>
+    <div class="stat-box c3"><div class="num" id="st_expired">—</div><div class="lbl">Expired</div></div>
+    <div class="stat-box c4"><div class="num" id="st_online">—</div><div class="lbl">Online Now</div></div>
+  </div>
+
+  <!-- Create Key -->
+  <div class="panel">
+    <div class="panel-header">
+      <h2>🔑 Generate New License Key</h2>
+    </div>
+    <div class="panel-body">
+      <div id="newKeyBox">
+        <div class="key-text" id="newKeyText"></div>
+        <p>Copy and send this key to your customer. It won't be shown again!</p>
+      </div>
+      <div class="create-form">
+        <div class="field">
+          <label>Customer Email</label>
+          <input type="email" id="f_email" placeholder="customer@email.com" />
+        </div>
+        <div class="field">
+          <label>Plan</label>
+          <select id="f_plan">
+            <option value="monthly">Monthly (30 days)</option>
+            <option value="quarterly">Quarterly (90 days)</option>
+            <option value="lifetime">Lifetime</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Note (optional)</label>
+          <input type="text" id="f_note" placeholder="e.g. Paid via Gumroad" style="min-width:200px" />
+        </div>
+        <div class="field" style="justify-content:flex-end">
+          <button class="btn btn-primary btn-sm" style="padding:10px 20px" onclick="createKey()">Generate Key</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- License Table -->
+  <div class="panel">
+    <div class="panel-header">
+      <h2>📋 All License Keys</h2>
+      <button class="btn btn-cyan btn-sm" onclick="loadLicenses()">↻ Refresh</button>
+    </div>
+    <div id="licenseTableWrap">
+      <div class="empty-state">Loading...</div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+let adminPwd = '';
+
+function login() {
+  const pwd = document.getElementById('pwdInput').value;
+  fetch('/admin/stats', { headers: { 'x-admin-password': pwd } })
+    .then(r => {
+      if (r.status === 401) { document.getElementById('loginErr').style.display = 'block'; return; }
+      adminPwd = pwd;
+      document.getElementById('loginScreen').style.display = 'none';
+      loadAll();
+    });
+}
+
+function adminFetch(url, opts = {}) {
+  opts.headers = { ...(opts.headers || {}), 'x-admin-password': adminPwd };
+  return fetch(url, opts);
+}
+
+function loadAll() { loadStats(); loadLicenses(); }
+
+function loadStats() {
+  adminFetch('/admin/stats').then(r => r.json()).then(d => {
+    document.getElementById('st_total').textContent = d.total;
+    document.getElementById('st_active').textContent = d.active;
+    document.getElementById('st_expired').textContent = d.expired;
+    document.getElementById('st_online').textContent = d.online;
+    document.getElementById('headerStats').textContent = `${d.online} users online`;
+  });
+}
+
+function loadLicenses() {
+  adminFetch('/admin/licenses').then(r => r.json()).then(data => {
+    const keys = Object.values(data).sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt));
+    const wrap = document.getElementById('licenseTableWrap');
+
+    if (keys.length === 0) {
+      wrap.innerHTML = '<div class="empty-state">No licenses yet. Generate one above!</div>';
+      return;
+    }
+
+    const rows = keys.map(lic => {
+      const isExpired = lic.expiresAt && new Date() > new Date(lic.expiresAt);
+      const status = !lic.active ? 'revoked' : isExpired ? 'expired' : 'active';
+      const statusBadge = {
+        active: '<span class="badge badge-active">● Active</span>',
+        revoked: '<span class="badge badge-revoked">✕ Revoked</span>',
+        expired: '<span class="badge badge-expired">⌛ Expired</span>'
+      }[status];
+      const planBadge = lic.plan === 'lifetime'
+        ? '<span class="badge badge-lifetime">∞ Lifetime</span>'
+        : `<span style="font-size:12px;color:var(--muted)">${lic.plan}</span>`;
+      const expiry = lic.expiresAt ? new Date(lic.expiresAt).toLocaleDateString() : '—';
+      const tiktok = lic.tiktokUsername ? `@${lic.tiktokUsername}` : '<span style="color:var(--muted)">Not used yet</span>';
+
+      return `<tr>
+        <td><span class="key-mono">${lic.key}</span> <span class="copy-key" onclick="copyText('${lic.key}', this)">📋</span></td>
+        <td>${lic.email || '<span style="color:var(--muted)">—</span>'}</td>
+        <td>${tiktok}</td>
+        <td>${planBadge}</td>
+        <td>${expiry}</td>
+        <td>${statusBadge}</td>
+        <td>
+          <div class="actions">
+            ${status === 'active' ? `<button class="btn btn-sm btn-red" onclick="revokeKey('${lic.key}')">Revoke</button>` : `<button class="btn btn-sm btn-green" onclick="activateKey('${lic.key}')">Activate</button>`}
+            ${lic.plan !== 'lifetime' ? `<button class="btn btn-sm btn-yellow" onclick="extendKey('${lic.key}')">+30d</button>` : ''}
+          </div>
+        </td>
+      </tr>`;
+    }).join('');
+
+    wrap.innerHTML = `<table>
+      <thead><tr><th>License Key</th><th>Email</th><th>TikTok</th><th>Plan</th><th>Expires</th><th>Status</th><th>Actions</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  });
+}
+
+function createKey() {
+  const email = document.getElementById('f_email').value.trim();
+  const plan = document.getElementById('f_plan').value;
+  const note = document.getElementById('f_note').value.trim();
+  const days = plan === 'monthly' ? 30 : plan === 'quarterly' ? 90 : 0;
+
+  adminFetch('/admin/licenses', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, plan, note, daysValid: days })
+  }).then(r => r.json()).then(d => {
+    if (d.success) {
+      const box = document.getElementById('newKeyBox');
+      document.getElementById('newKeyText').textContent = d.key;
+      box.style.display = 'block';
+      document.getElementById('f_email').value = '';
+      document.getElementById('f_note').value = '';
+      loadLicenses();
+      loadStats();
+      // Auto-copy
+      navigator.clipboard.writeText(d.key).catch(() => {});
+    }
+  });
+}
+
+function revokeKey(key) {
+  if (!confirm(`Revoke ${key}?`)) return;
+  adminFetch(`/admin/licenses/${key}/revoke`, { method: 'POST' }).then(() => loadLicenses());
+}
+
+function activateKey(key) {
+  adminFetch(`/admin/licenses/${key}/activate`, { method: 'POST' }).then(() => loadLicenses());
+}
+
+function extendKey(key) {
+  adminFetch(`/admin/licenses/${key}/extend`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ days: 30 })
+  }).then(() => loadLicenses());
+}
+
+function copyText(text, el) {
+  navigator.clipboard.writeText(text);
+  el.textContent = '✅';
+  setTimeout(() => el.textContent = '📋', 1500);
+}
+
+// Auto-refresh stats every 15s
+setInterval(() => { if (adminPwd) loadStats(); }, 15000);
+</script>
+</body>
+</html>

@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stream Overlay</title>
+<script src="/socket.io/socket.io.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  /* TRANSPARENT background — this is key for overlay */
+  body {
+    background: transparent !important;
+    overflow: hidden;
+    width: 1920px;
+    height: 1080px;
+    font-family: 'Segoe UI', Arial, sans-serif;
+  }
+
+  /* ── Reply Card ── */
+  .reply-card {
+    position: absolute;
+    bottom: 120px;
+    left: 40px;
+    max-width: 580px;
+    background: rgba(0, 0, 0, 0.82);
+    border: 2px solid rgba(254, 44, 85, 0.8);
+    border-radius: 16px;
+    padding: 0;
+    overflow: hidden;
+    backdrop-filter: blur(12px);
+    box-shadow: 0 8px 40px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.05);
+    transform: translateY(120px);
+    opacity: 0;
+    transition: transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.4s ease;
+    pointer-events: none;
+  }
+
+  .reply-card.show {
+    transform: translateY(0);
+    opacity: 1;
+  }
+
+  .reply-card.hide {
+    transform: translateY(-30px);
+    opacity: 0;
+    transition: transform 0.4s ease-in, opacity 0.35s ease-in;
+  }
+
+  /* Header bar */
+  .card-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    background: rgba(254, 44, 85, 0.9);
+  }
+
+  .tiktok-icon {
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+  }
+
+  .question-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: #fff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 460px;
+    opacity: 0.95;
+  }
+
+  /* Body */
+  .card-body {
+    padding: 14px 18px 16px;
+  }
+
+  .reply-text {
+    font-size: 22px;
+    font-weight: 700;
+    color: #ffffff;
+    line-height: 1.4;
+    text-shadow: 0 2px 8px rgba(0,0,0,0.5);
+    letter-spacing: -0.2px;
+  }
+
+  /* Badge */
+  .reply-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 8px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    background: rgba(255,255,255,0.1);
+    color: rgba(255,255,255,0.7);
+    letter-spacing: 0.04em;
+  }
+
+  .badge-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #25f4ee;
+    animation: blink 1.2s ease-in-out infinite;
+  }
+
+  @keyframes blink {
+    0%,100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+
+
+  /* ── Progress bar (auto-dismiss timer) ── */
+  .progress-bar {
+    height: 3px;
+    background: rgba(254, 44, 85, 0.5);
+    border-radius: 0 0 0 0;
+    transform-origin: left;
+    transform: scaleX(1);
+    transition: transform linear;
+  }
+
+  /* ── Queue indicator ── */
+  .queue-dot {
+    position: absolute;
+    bottom: 120px;
+    left: 40px;
+    display: flex;
+    gap: 6px;
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+  .queue-dot.show { opacity: 1; }
+  .qdot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: rgba(254,44,85,0.6);
+  }
+</style>
+</head>
+<body>
+
+<!-- Reply Card -->
+<div class="reply-card" id="replyCard">
+  <div class="progress-bar" id="progressBar"></div>
+  <div class="card-header">
+    <svg class="tiktok-icon" viewBox="0 0 24 24" fill="white">
+      <path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-2.88 2.5 2.89 2.89 0 0 1-2.89-2.89 2.89 2.89 0 0 1 2.89-2.89c.28 0 .54.04.79.1V9.01a6.32 6.32 0 0 0-.79-.05 6.34 6.34 0 0 0-6.34 6.34 6.34 6.34 0 0 0 6.34 6.34 6.34 6.34 0 0 0 6.33-6.34V8.69a8.23 8.23 0 0 0 4.81 1.54V6.78a4.85 4.85 0 0 1-1.04-.09z"/>
+    </svg>
+    <div class="question-label" id="questionLabel">@viewer asked...</div>
+  </div>
+  <div class="card-body">
+    <div class="reply-text" id="replyText">Reply text goes here</div>
+    <div class="reply-badge">
+      <div class="badge-dot"></div>
+      <span id="replyBadge">AI Reply</span>
+    </div>
+  </div>
+</div>
+
+
+<script>
+const socket = io();
+
+// ── Reply queue system ──────────────────────────────────────
+const replyQueue = [];
+let replyShowing = false;
+const REPLY_DURATION = 7000; // 7 seconds on screen
+
+function queueReply(data) {
+  replyQueue.push(data);
+  if (!replyShowing) showNextReply();
+}
+
+function showNextReply() {
+  if (replyQueue.length === 0) {
+    replyShowing = false;
+    return;
+  }
+  replyShowing = true;
+  const data = replyQueue.shift();
+
+  const card = document.getElementById('replyCard');
+  const questionLabel = document.getElementById('questionLabel');
+  const replyText = document.getElementById('replyText');
+  const replyBadge = document.getElementById('replyBadge');
+  const progressBar = document.getElementById('progressBar');
+
+  questionLabel.textContent = `@${data.username}: "${data.message.substring(0, 60)}${data.message.length > 60 ? '…' : ''}"`;
+  replyText.textContent = data.reply;
+  replyBadge.textContent = data.replyType === 'quick' ? '⚡ Quick Reply' : '✨ AI Reply';
+
+  // Animate in
+  card.classList.remove('hide');
+  requestAnimationFrame(() => {
+    card.classList.add('show');
+  });
+
+  // Progress bar
+  progressBar.style.transition = 'none';
+  progressBar.style.transform = 'scaleX(1)';
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      progressBar.style.transition = `transform ${REPLY_DURATION}ms linear`;
+      progressBar.style.transform = 'scaleX(0)';
+    });
+  });
+
+  // Dismiss after duration
+  setTimeout(() => {
+    card.classList.remove('show');
+    card.classList.add('hide');
+    setTimeout(() => {
+      card.classList.remove('hide');
+      showNextReply();
+    }, 500);
+  }, REPLY_DURATION);
+}
+
+// ── Socket events ────────────────────────────────────────────
+socket.on('chat', data => {
+  if (data.reply) {
+    queueReply(data);
+  }
+});
+
+// ── TEST MODE ─────────────────────────────────────────────────
+setTimeout(() => {
+  const urlParams = new URLSearchParams(window.location.search);
+  if (urlParams.get('test') === '1') {
+    queueReply({ username: 'viewer123', message: 'which phone are you using?', reply: 'I use iPhone 17 Pro Max for streaming! 📱', replyType: 'quick' });
+    setTimeout(() => queueReply({ username: 'fan_xyz', message: 'where are you from?', reply: "I'm from Nepal! 🌍 Beautiful country!", replyType: 'ai' }), 3000);
+  }
+}, 1000);
+</script>
+</body>
+</html>
