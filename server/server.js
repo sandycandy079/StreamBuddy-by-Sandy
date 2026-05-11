@@ -24,12 +24,13 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ================================================================
-//  CONFIG — Change these before deploying!
+//  CONFIG — All secrets come from environment variables
+//  Set these in Railway → your service → Variables tab
 // ================================================================
-const ADMIN_PASSWORD = 'numb_admin_2024';   // ← Change this!
-const GEMINI_API_KEY = 'AIzaSyBmoZr09bYw7Q87RuajjlQLr6GIMRmI5LA'; // ← Your Gemini key
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'change_me_now';
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const CURRENT_VERSION = '1.0.0';            // bump this when you update
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 // ================================================================
 //  DATABASE (flat JSON files — no external DB needed!)
