@@ -240,74 +240,105 @@ async function connectToTikTok(sessionId, tiktokUsername, tiktokSessionId, ttTar
 
   console.log(`[${sessionId.slice(0,8)}] 🔗 Connecting to @${tiktokUsername}...`);
 
-  const opts = {};
-  if (tiktokSessionId) {
-    opts.sessionId = tiktokSessionId;
-    // tt-target-idc is required by TikTok when sessionId is set
-    // Try to fetch it automatically, fallback to default
+  // All known TikTok datacenters — tried in order until one works
+  const IDC_REGIONS = ['alisg', 'useast2a', 'maliva', 'alisg2', 'sg'];
+
+  async function tryConnect(regions, sessionIdCookie, extIdc) {
+    // Build candidate list: extension cookie first, then all known regions
+    const candidates = [];
+    if (extIdc) candidates.push(extIdc);
+    for (const r of regions) {
+      if (r !== extIdc) candidates.push(r);
+    }
+
+    // Also try to auto-detect from TikTok API
     try {
       const idcRes = await fetch('https://www.tiktok.com/api/user/detail/?uniqueId=' + tiktokUsername, {
         headers: {
-          'Cookie': `sessionid=${tiktokSessionId}`,
+          'Cookie': `sessionid=${sessionIdCookie}`,
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
       });
       const setCookie = idcRes.headers.get('set-cookie') || '';
       const idcMatch = setCookie.match(/tt-target-idc=([^;]+)/);
-      if (idcMatch) opts['tt-target-idc'] = idcMatch[1];
+      if (idcMatch && !candidates.includes(idcMatch[1])) {
+        candidates.unshift(idcMatch[1]); // put detected region first
+        console.log(`[${sessionId.slice(0,8)}] 🌍 Auto-detected region: ${idcMatch[1]}`);
+      }
     } catch {}
-    // Use value from extension cookies if available, else fallback
-    if (!opts['tt-target-idc'] && ttTargetIdc) opts['tt-target-idc'] = ttTargetIdc;
-    if (!opts['tt-target-idc']) opts['tt-target-idc'] = 'useast2a';
+
+    for (const idc of candidates) {
+      console.log(`[${sessionId.slice(0,8)}] 🔄 Trying region: ${idc}`);
+      const opts = { sessionId: sessionIdCookie, 'tt-target-idc': idc };
+      const conn = new WebcastPushConnection(tiktokUsername, opts);
+      try {
+        const state = await conn.connect();
+        // Success!
+        console.log(`[${sessionId.slice(0,8)}] ✅ Connected with region ${idc}! Room: ${state.roomId}`);
+        session.tiktokConn = conn;
+        session.tiktokUsername = tiktokUsername;
+        session.isConnected = true;
+        io.to(sessionId).emit('status', { connected: true, username: tiktokUsername, roomId: state.roomId });
+
+        conn.on('chat', data => {
+          console.log(`[${sessionId.slice(0,8)}] 📨 Raw chat: ${data.uniqueId}: ${data.comment}`);
+          handleChatMessage(data, sessionId);
+        });
+        conn.on('gift', data => {
+          session.stats.gifts++;
+          const event = { id: Date.now(), type: 'gift', username: data.uniqueId, giftName: data.giftName || 'a gift', timestamp: new Date().toLocaleTimeString() };
+          session.messages.unshift(event);
+          io.to(sessionId).emit('event', event);
+          io.to(sessionId).emit('stats', session.stats);
+        });
+        conn.on('follow', data => {
+          session.stats.followers++;
+          const event = { id: Date.now(), type: 'follow', username: data.uniqueId, timestamp: new Date().toLocaleTimeString() };
+          session.messages.unshift(event);
+          io.to(sessionId).emit('event', event);
+          io.to(sessionId).emit('stats', session.stats);
+        });
+        conn.on('like', data => {
+          session.stats.likes += data.likeCount || 1;
+          io.to(sessionId).emit('stats', session.stats);
+        });
+        conn.on('disconnected', () => {
+          session.isConnected = false;
+          io.to(sessionId).emit('status', { connected: false, error: 'Stream disconnected' });
+        });
+        conn.on('error', err => {
+          io.to(sessionId).emit('status', { connected: false, error: err.message });
+        });
+        return; // done!
+      } catch (err) {
+        console.log(`[${sessionId.slice(0,8)}] ❌ Region ${idc} failed: ${err.message}`);
+        try { conn.disconnect(); } catch {}
+        // continue to next region
+      }
+    }
+    // All regions failed
+    console.error(`[${sessionId.slice(0,8)}] ❌ All regions failed`);
+    io.to(sessionId).emit('status', { connected: false, error: 'Could not connect. Make sure you are LIVE on TikTok.' });
   }
 
-  const conn = new WebcastPushConnection(tiktokUsername, opts);
-  session.tiktokConn = conn;
-  session.tiktokUsername = tiktokUsername;
+  if (tiktokSessionId) {
+    tryConnect(IDC_REGIONS, tiktokSessionId, ttTargetIdc);
+  } else {
+    // No sessionId — try without it
+    const conn = new WebcastPushConnection(tiktokUsername, {});
+    session.tiktokConn = conn;
+    session.tiktokUsername = tiktokUsername;
+    conn.connect()
+      .then(state => {
+        session.isConnected = true;
+        io.to(sessionId).emit('status', { connected: true, username: tiktokUsername, roomId: state.roomId });
+      })
+      .catch(err => {
+        session.isConnected = false;
+        io.to(sessionId).emit('status', { connected: false, error: err.message });
+      });
 
-  conn.connect()
-    .then(state => {
-      session.isConnected = true;
-      console.log(`[${sessionId.slice(0,8)}] ✅ Connected! Room: ${state.roomId}`);
-      io.to(sessionId).emit('status', { connected: true, username: tiktokUsername, roomId: state.roomId });
-    })
-    .catch(err => {
-      session.isConnected = false;
-      console.error(`[${sessionId.slice(0,8)}] ❌ Failed:`, err.message);
-      io.to(sessionId).emit('status', { connected: false, error: err.message });
-    });
-
-  conn.on('chat', data => handleChatMessage(data, sessionId));
-
-  conn.on('gift', data => {
-    session.stats.gifts++;
-    const event = { id: Date.now(), type: 'gift', username: data.uniqueId, giftName: data.giftName || 'a gift', timestamp: new Date().toLocaleTimeString() };
-    session.messages.unshift(event);
-    io.to(sessionId).emit('event', event);
-    io.to(sessionId).emit('stats', session.stats);
-  });
-
-  conn.on('follow', data => {
-    session.stats.followers++;
-    const event = { id: Date.now(), type: 'follow', username: data.uniqueId, timestamp: new Date().toLocaleTimeString() };
-    session.messages.unshift(event);
-    io.to(sessionId).emit('event', event);
-    io.to(sessionId).emit('stats', session.stats);
-  });
-
-  conn.on('like', data => {
-    session.stats.likes += data.likeCount || 1;
-    io.to(sessionId).emit('stats', session.stats);
-  });
-
-  conn.on('disconnected', () => {
-    session.isConnected = false;
-    io.to(sessionId).emit('status', { connected: false, error: 'Stream disconnected' });
-  });
-
-  conn.on('error', err => {
-    io.to(sessionId).emit('status', { connected: false, error: err.message });
-  });
+  }
 }
 
 // ================================================================
