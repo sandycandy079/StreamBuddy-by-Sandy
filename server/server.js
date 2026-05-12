@@ -1,5 +1,5 @@
 // ================================================================
-//  NUMB CHATBOT — SaaS Server
+//  StreamBuddy By Sandy — SaaS Server
 //  Multi-user | License Keys | Auto-update | Gemini AI
 // ================================================================
 
@@ -340,7 +340,23 @@ app.post('/api/validate', (req, res) => {
 // Connect to TikTok live
 app.post('/api/connect', (req, res) => {
   const { sessionId, tiktokUsername, tiktokSessionId } = req.body;
-  if (!sessionId || !users[sessionId]) return res.json({ success: false, error: 'Invalid session' });
+
+  // Reload users from disk on every request (survives Railway restarts)
+  users = readDB('users');
+  licenses = readDB('licenses');
+
+  // If session not found, try to recover by re-validating via TikTok username
+  if (!sessionId) return res.json({ success: false, error: 'Session ID required' });
+
+  if (!users[sessionId]) {
+    // Session lost after server restart — find license by TikTok username
+    const found = getLicenseByTikTok(tiktokUsername);
+    if (!found) return res.json({ success: false, error: 'Session expired. Please re-activate your license in the extension.' });
+    const [licKey, lic] = found;
+    // Re-register the session
+    users[sessionId] = { licenseKey: licKey, tiktokUsername, connectedAt: new Date().toISOString() };
+    writeDB('users', users);
+  }
 
   const session = getSession(sessionId);
   const lic = licenses[users[sessionId].licenseKey];
