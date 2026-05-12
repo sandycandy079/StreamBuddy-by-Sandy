@@ -1,7 +1,7 @@
 {
-  "name": "numb-chatbot-server",
+  "name": "StreamBuddy By Sandy",
   "version": "1.0.0",
-  "description": "TikTok Live Chatbot SaaS Server",
+  "description": "Your Stream Buddy to Reply your FAQs instantly.",
   "main": "server.js",
   "type": "module",
   "scripts": {
