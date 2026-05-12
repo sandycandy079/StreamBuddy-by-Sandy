@@ -231,7 +231,7 @@ async function handleChatMessage(data, sessionId) {
   if (msgObj.reply) console.log(`[${sessionId.slice(0,8)}]    🤖 (${msgObj.replyType}): ${msgObj.reply}`);
 }
 
-function connectToTikTok(sessionId, tiktokUsername, tiktokSessionId, ttTargetIdc) {
+async function connectToTikTok(sessionId, tiktokUsername, tiktokSessionId, ttTargetIdc) {
   const session = getSession(sessionId);
 
   if (session.tiktokConn) {
