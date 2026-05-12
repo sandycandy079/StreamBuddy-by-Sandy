@@ -1,5 +1,5 @@
 // ================================================================
-//  NUMB CHATBOT — SaaS Server
+// StreamBuddy By Sandy — SaaS Server
 //  Multi-user | License Keys | Auto-update | Gemini AI
 // ================================================================
 
@@ -100,14 +100,14 @@ function getSession(sessionId) {
 // ================================================================
 function fillTemplate(template, username = '', streamerInfo = {}) {
   return template
-    .replace(/{name}/g, streamerInfo.name || '')
-    .replace(/{age}/g, streamerInfo.age || '')
-    .replace(/{phone}/g, streamerInfo.phone || '')
-    .replace(/{setup}/g, streamerInfo.setup || '')
-    .replace(/{location}/g, streamerInfo.location || '')
-    .replace(/{streamingFor}/g, streamerInfo.streamingFor || '')
+    .replace(/{Numb}/g, streamerInfo.name || '')
+    .replace(/{28}/g, streamerInfo.age || '')
+    .replace(/{Iphone 17 Pro Max}/g, streamerInfo.phone || '')
+    .replace(/{PC:LENOVO LOQ 15IRX10 | Camera:Sony A6400 | Headset:Razer Kraken Lite}/g, streamerInfo.setup || '')
+    .replace(/{Nepal}/g, streamerInfo.location || '')
+    .replace(/{Since January}/g, streamerInfo.streamingFor || '')
     .replace(/{about}/g, streamerInfo.about || '')
-    .replace(/{username}/g, username);
+    .replace(/{lost_inhis_faith}/g, username);
 }
 
 function checkQuickReply(message, username, quickReplies, streamerInfo) {
