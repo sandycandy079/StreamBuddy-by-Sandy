@@ -1,5 +1,5 @@
 // ================================================================
-//  StreamBuddy By Sandy — SaaS Server
+//  NUMB CHATBOT — SaaS Server
 //  Multi-user | License Keys | Auto-update | Gemini AI
 // ================================================================
 
@@ -231,7 +231,7 @@ async function handleChatMessage(data, sessionId) {
   if (msgObj.reply) console.log(`[${sessionId.slice(0,8)}]    🤖 (${msgObj.replyType}): ${msgObj.reply}`);
 }
 
-function connectToTikTok(sessionId, tiktokUsername, tiktokSessionId) {
+function connectToTikTok(sessionId, tiktokUsername, tiktokSessionId, ttTargetIdc) {
   const session = getSession(sessionId);
 
   if (session.tiktokConn) {
@@ -241,7 +241,25 @@ function connectToTikTok(sessionId, tiktokUsername, tiktokSessionId) {
   console.log(`[${sessionId.slice(0,8)}] 🔗 Connecting to @${tiktokUsername}...`);
 
   const opts = {};
-  if (tiktokSessionId) opts.sessionId = tiktokSessionId;
+  if (tiktokSessionId) {
+    opts.sessionId = tiktokSessionId;
+    // tt-target-idc is required by TikTok when sessionId is set
+    // Try to fetch it automatically, fallback to default
+    try {
+      const idcRes = await fetch('https://www.tiktok.com/api/user/detail/?uniqueId=' + tiktokUsername, {
+        headers: {
+          'Cookie': `sessionid=${tiktokSessionId}`,
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+      });
+      const setCookie = idcRes.headers.get('set-cookie') || '';
+      const idcMatch = setCookie.match(/tt-target-idc=([^;]+)/);
+      if (idcMatch) opts['tt-target-idc'] = idcMatch[1];
+    } catch {}
+    // Use value from extension cookies if available, else fallback
+    if (!opts['tt-target-idc'] && ttTargetIdc) opts['tt-target-idc'] = ttTargetIdc;
+    if (!opts['tt-target-idc']) opts['tt-target-idc'] = 'useast2a';
+  }
 
   const conn = new WebcastPushConnection(tiktokUsername, opts);
   session.tiktokConn = conn;
@@ -339,7 +357,7 @@ app.post('/api/validate', (req, res) => {
 
 // Connect to TikTok live
 app.post('/api/connect', (req, res) => {
-  const { sessionId, tiktokUsername, tiktokSessionId } = req.body;
+  const { sessionId, tiktokUsername, tiktokSessionId, ttTargetIdc } = req.body;
 
   // Reload users from disk on every request (survives Railway restarts)
   users = readDB('users');
@@ -362,7 +380,7 @@ app.post('/api/connect', (req, res) => {
   const lic = licenses[users[sessionId].licenseKey];
   session.config = lic?.config || getDefaultConfig(lic);
 
-  connectToTikTok(sessionId, tiktokUsername, tiktokSessionId);
+  connectToTikTok(sessionId, tiktokUsername, tiktokSessionId, ttTargetIdc);
   res.json({ success: true });
 });
 
