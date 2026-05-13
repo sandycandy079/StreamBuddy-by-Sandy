@@ -4,7 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Stream Overlay</title>
-<script src="/socket.io/socket.io.js"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -12,8 +11,8 @@
   body {
     background: transparent !important;
     overflow: hidden;
-    width: 1920px;
-    height: 1080px;
+    width: 1080px;
+    height: 1920px;
     font-family: 'Segoe UI', Arial, sans-serif;
   }
 
@@ -167,22 +166,18 @@
 
 
 <script>
-const socket = io();
+const SERVER_URL = 'https://streambuddy-by-sandy-production.up.railway.app';
 
-// ── Load settings from server ─────────────────────────────────
+// ── Session ID from URL ───────────────────────────────────────
 const SESSION_ID = new URLSearchParams(window.location.search).get('session') ||
   window.location.pathname.split('/').pop();
 
-// ✅ FIX: Join the session room so this overlay receives chat events
-socket.on('connect', () => {
-  if (SESSION_ID) socket.emit('join', SESSION_ID);
-});
-
+// ── Fetch/config (no socket needed) ──────────────────────────
 let overlayConfig = {};
 
 async function loadConfig() {
   try {
-    const res = await fetch(`/api/overlay-config/${SESSION_ID}`);
+    const res = await fetch(`${SERVER_URL}/api/overlay-config/${SESSION_ID}`);
     overlayConfig = await res.json();
     applyConfig(overlayConfig);
   } catch {}
@@ -200,7 +195,6 @@ function applyConfig(cfg) {
   const f = cfg.fonts || {};
   const a = cfg.animation || {};
 
-  // Overlay appearance
   if (o.accentColor) {
     card.style.borderColor = o.accentColor + 'cc';
     header.style.background = o.accentColor + 'e6';
@@ -210,7 +204,17 @@ function applyConfig(cfg) {
   if (o.borderRadius !== undefined) card.style.borderRadius = o.borderRadius + 'px';
   if (o.cardWidth !== undefined) card.style.maxWidth = o.cardWidth + 'px';
 
-  // Layout position
+  // ✅ Orientation — resize the canvas for OBS
+  const orientation = o.orientation || 'vertical';
+  if (orientation === 'landscape') {
+    document.body.style.width  = '1920px';
+    document.body.style.height = '1080px';
+  } else {
+    // vertical — TikTok Live 9:16
+    document.body.style.width  = '1080px';
+    document.body.style.height = '1920px';
+  }
+
   const layout = o.layout || 'bottom-left';
   card.style.bottom = 'auto'; card.style.top = 'auto';
   card.style.left = 'auto'; card.style.right = 'auto';
@@ -220,7 +224,6 @@ function applyConfig(cfg) {
   if (layout === 'top-right')     { card.style.top = '40px'; card.style.right = '40px'; }
   if (layout === 'center-bottom') { card.style.bottom = '120px'; card.style.left = '50%'; card.style.transform += ' translateX(-50%)'; }
 
-  // Fonts
   if (f.fontFamily) replyText.style.fontFamily = f.fontFamily;
   if (f.fontSize) replyText.style.fontSize = f.fontSize + 'px';
   if (f.fontWeight) replyText.style.fontWeight = f.fontWeight;
@@ -228,7 +231,6 @@ function applyConfig(cfg) {
   if (f.letterSpacing !== undefined) replyText.style.letterSpacing = f.letterSpacing + 'px';
   if (f.lineHeight) replyText.style.lineHeight = f.lineHeight;
 
-  // Animation effects
   if (a.showProgress === false && progressBar) progressBar.style.display = 'none';
   if (a.showBadgeDot === false && badgeDot) badgeDot.style.display = 'none';
   if (a.showBlur === false) card.style.backdropFilter = 'none';
@@ -237,9 +239,9 @@ function applyConfig(cfg) {
 }
 
 loadConfig();
-setInterval(loadConfig, 30000); // refresh config every 30s
+setInterval(loadConfig, 30000);
 
-// ── Reply queue system ──────────────────────────────────────
+// ── Reply queue system ────────────────────────────────────────
 const replyQueue = [];
 let replyShowing = false;
 let REPLY_DURATION = 7000;
@@ -250,10 +252,7 @@ function queueReply(data) {
 }
 
 function showNextReply() {
-  if (replyQueue.length === 0) {
-    replyShowing = false;
-    return;
-  }
+  if (replyQueue.length === 0) { replyShowing = false; return; }
   replyShowing = true;
   const data = replyQueue.shift();
 
@@ -267,13 +266,9 @@ function showNextReply() {
   replyText.textContent = data.reply;
   replyBadge.textContent = data.replyType === 'quick' ? '⚡ Quick Reply' : '✨ AI Reply';
 
-  // Animate in
   card.classList.remove('hide');
-  requestAnimationFrame(() => {
-    card.classList.add('show');
-  });
+  requestAnimationFrame(() => card.classList.add('show'));
 
-  // Progress bar
   progressBar.style.transition = 'none';
   progressBar.style.transform = 'scaleX(1)';
   requestAnimationFrame(() => {
@@ -283,25 +278,14 @@ function showNextReply() {
     });
   });
 
-  // Dismiss after duration
   setTimeout(() => {
     card.classList.remove('show');
     card.classList.add('hide');
-    setTimeout(() => {
-      card.classList.remove('hide');
-      showNextReply();
-    }, 500);
+    setTimeout(() => { card.classList.remove('hide'); showNextReply(); }, 500);
   }, REPLY_DURATION);
 }
 
-// ── Socket events ────────────────────────────────────────────
-socket.on('chat', data => {
-  if (data.reply) {
-    queueReply(data);
-  }
-});
-
-// ── TEST MODE ─────────────────────────────────────────────────
+// ── TEST MODE (no socket needed) ─────────────────────────────
 setTimeout(() => {
   const urlParams = new URLSearchParams(window.location.search);
   if (urlParams.get('test') === '1') {
@@ -309,6 +293,34 @@ setTimeout(() => {
     setTimeout(() => queueReply({ username: 'fan_xyz', message: 'where are you from?', reply: "I'm from Nepal! 🌍 Beautiful country!", replyType: 'ai' }), 3000);
   }
 }, 1000);
+
+// ── Socket.IO — loaded dynamically, initialized after script loads ──
+function initSocket() {
+  const socket = io(SERVER_URL);
+
+  // ✅ Join the session room so this overlay receives chat events
+  socket.on('connect', () => {
+    if (SESSION_ID) socket.emit('join', SESSION_ID);
+  });
+
+  socket.on('chat', data => {
+    if (data.reply) queueReply(data);
+  });
+}
+
+// Load socket.io from Railway server, fallback to CDN
+(function loadSocketIO() {
+  const primary = document.createElement('script');
+  primary.src = SERVER_URL + '/socket.io/socket.io.js';
+  primary.onload = initSocket;
+  primary.onerror = function() {
+    const fallback = document.createElement('script');
+    fallback.src = 'https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js';
+    fallback.onload = initSocket;
+    document.head.appendChild(fallback);
+  };
+  document.head.appendChild(primary);
+})();
 </script>
 </body>
 </html>
