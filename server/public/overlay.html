@@ -169,10 +169,75 @@
 <script>
 const socket = io();
 
+// ── Load settings from server ─────────────────────────────────
+const SESSION_ID = new URLSearchParams(window.location.search).get('session') ||
+  window.location.pathname.split('/').pop();
+
+let overlayConfig = {};
+
+async function loadConfig() {
+  try {
+    const res = await fetch(`/api/overlay-config/${SESSION_ID}`);
+    overlayConfig = await res.json();
+    applyConfig(overlayConfig);
+  } catch {}
+}
+
+function applyConfig(cfg) {
+  if (!cfg) return;
+  const card = document.getElementById('replyCard');
+  const header = document.querySelector('.card-header');
+  const replyText = document.querySelector('.reply-text');
+  const progressBar = document.getElementById('progressBar');
+  const badgeDot = document.querySelector('.badge-dot');
+
+  const o = cfg.overlay || {};
+  const f = cfg.fonts || {};
+  const a = cfg.animation || {};
+
+  // Overlay appearance
+  if (o.accentColor) {
+    card.style.borderColor = o.accentColor + 'cc';
+    header.style.background = o.accentColor + 'e6';
+  }
+  if (o.bgOpacity !== undefined) card.style.background = `rgba(0,0,0,${o.bgOpacity})`;
+  if (o.blurStrength !== undefined) card.style.backdropFilter = `blur(${o.blurStrength}px)`;
+  if (o.borderRadius !== undefined) card.style.borderRadius = o.borderRadius + 'px';
+  if (o.cardWidth !== undefined) card.style.maxWidth = o.cardWidth + 'px';
+
+  // Layout position
+  const layout = o.layout || 'bottom-left';
+  card.style.bottom = 'auto'; card.style.top = 'auto';
+  card.style.left = 'auto'; card.style.right = 'auto';
+  if (layout === 'bottom-left')   { card.style.bottom = '120px'; card.style.left = '40px'; }
+  if (layout === 'bottom-right')  { card.style.bottom = '120px'; card.style.right = '40px'; }
+  if (layout === 'top-left')      { card.style.top = '40px'; card.style.left = '40px'; }
+  if (layout === 'top-right')     { card.style.top = '40px'; card.style.right = '40px'; }
+  if (layout === 'center-bottom') { card.style.bottom = '120px'; card.style.left = '50%'; card.style.transform += ' translateX(-50%)'; }
+
+  // Fonts
+  if (f.fontFamily) replyText.style.fontFamily = f.fontFamily;
+  if (f.fontSize) replyText.style.fontSize = f.fontSize + 'px';
+  if (f.fontWeight) replyText.style.fontWeight = f.fontWeight;
+  if (f.textColor) replyText.style.color = f.textColor;
+  if (f.letterSpacing !== undefined) replyText.style.letterSpacing = f.letterSpacing + 'px';
+  if (f.lineHeight) replyText.style.lineHeight = f.lineHeight;
+
+  // Animation effects
+  if (a.showProgress === false && progressBar) progressBar.style.display = 'none';
+  if (a.showBadgeDot === false && badgeDot) badgeDot.style.display = 'none';
+  if (a.showBlur === false) card.style.backdropFilter = 'none';
+  if (a.showGlow === false) card.style.boxShadow = '0 8px 40px rgba(0,0,0,0.6)';
+  if (a.displayDuration) REPLY_DURATION = a.displayDuration * 1000;
+}
+
+loadConfig();
+setInterval(loadConfig, 30000); // refresh config every 30s
+
 // ── Reply queue system ──────────────────────────────────────
 const replyQueue = [];
 let replyShowing = false;
-const REPLY_DURATION = 7000; // 7 seconds on screen
+let REPLY_DURATION = 7000;
 
 function queueReply(data) {
   replyQueue.push(data);
