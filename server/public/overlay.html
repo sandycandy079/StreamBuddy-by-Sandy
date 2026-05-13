@@ -173,6 +173,11 @@ const socket = io();
 const SESSION_ID = new URLSearchParams(window.location.search).get('session') ||
   window.location.pathname.split('/').pop();
 
+// ✅ FIX: Join the session room so this overlay receives chat events
+socket.on('connect', () => {
+  if (SESSION_ID) socket.emit('join', SESSION_ID);
+});
+
 let overlayConfig = {};
 
 async function loadConfig() {
