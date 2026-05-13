@@ -33,10 +33,17 @@ const CURRENT_VERSION = '1.0.0';            // bump this when you update
 const PORT = process.env.PORT || 3000;
 
 // ================================================================
-//  DATABASE (flat JSON files — no external DB needed!)
+//  DATABASE (flat JSON files — persistent across Railway deploys!)
+//
+//  ⚠️  Railway ephemeral filesystem fix:
+//  Files under __dirname are wiped on every deploy.
+//  Store data in /data which is a Railway Persistent Volume mount.
+//  Falls back to ./db for local development.
 // ================================================================
-const DB_PATH = path.join(__dirname, 'db');
-if (!fs.existsSync(DB_PATH)) fs.mkdirSync(DB_PATH);
+const VOLUME_PATH = '/data';
+const DB_PATH = fs.existsSync(VOLUME_PATH) ? VOLUME_PATH : path.join(__dirname, 'db');
+if (!fs.existsSync(DB_PATH)) fs.mkdirSync(DB_PATH, { recursive: true });
+console.log(`[DB] Storage path: ${DB_PATH}`);
 
 function readDB(name) {
   const file = path.join(DB_PATH, `${name}.json`);
@@ -241,118 +248,139 @@ async function connectToTikTok(sessionId, tiktokUsername, tiktokSessionId, ttTar
 
   console.log(`[${sessionId.slice(0,8)}] 🔗 Connecting to @${tiktokUsername}...`);
 
-  // All known TikTok datacenters — tried in order until one works
-  const IDC_REGIONS = ['alisg', 'useast2a', 'maliva', 'alisg2', 'sg'];
+  // ── Attach all event listeners to a successful connection ──
+  function attachListeners(conn) {
+    conn.on('chat', data => {
+      console.log(`[${sessionId.slice(0,8)}] 📨 Raw chat: ${data.uniqueId}: ${data.comment}`);
+      handleChatMessage(data, sessionId);
+    });
+    conn.on('gift', data => {
+      session.stats.gifts++;
+      const event = { id: Date.now(), type: 'gift', username: data.uniqueId, giftName: data.giftName || 'a gift', timestamp: new Date().toLocaleTimeString() };
+      session.messages.unshift(event);
+      io.to(sessionId).emit('event', event);
+      io.to(sessionId).emit('stats', session.stats);
+    });
+    conn.on('follow', data => {
+      session.stats.followers++;
+      const event = { id: Date.now(), type: 'follow', username: data.uniqueId, timestamp: new Date().toLocaleTimeString() };
+      session.messages.unshift(event);
+      io.to(sessionId).emit('event', event);
+      io.to(sessionId).emit('stats', session.stats);
+    });
+    conn.on('like', data => {
+      session.stats.likes += data.likeCount || 1;
+      io.to(sessionId).emit('stats', session.stats);
+    });
+    conn.on('disconnected', () => {
+      session.isConnected = false;
+      io.to(sessionId).emit('status', { connected: false, error: 'Stream ended' });
+    });
+    conn.on('error', err => {
+      session.isConnected = false;
+      io.to(sessionId).emit('status', { connected: false, error: err.message });
+    });
+  }
 
-  async function tryConnect(regions, sessionIdCookie, extIdc) {
-    // Build candidate list: extension cookie first, then all known regions
-    const candidates = [];
-    if (extIdc) candidates.push(extIdc);
-    for (const r of regions) {
-      if (r !== extIdc) candidates.push(r);
+  // ── Try one region, returns { success, conn } or throws ──
+  async function tryRegion(sessionIdCookie, idc) {
+    // ✅ CRITICAL FIX: constructor throws synchronously if tt-target-idc is
+    // missing when sessionId is set — wrap it in try/catch to prevent server crash
+    let conn;
+    try {
+      conn = new WebcastPushConnection(tiktokUsername, {
+        sessionId: sessionIdCookie,
+        'tt-target-idc': idc
+      });
+    } catch (constructErr) {
+      throw new Error(`Constructor failed (${idc}): ${constructErr.message}`);
     }
+    const state = await conn.connect(); // throws if not live
+    return { conn, state };
+  }
 
-    // Also try to auto-detect from TikTok API
+  // ── Build ordered list of regions to try ──
+  async function tryConnect(sessionIdCookie, extIdc) {
+    const IDC_REGIONS = ['alisg', 'useast2a', 'maliva', 'alisg2', 'sg', 'i18n'];
+    const candidates = [];
+
+    // 1. Extension-supplied idc first
+    if (extIdc) candidates.push(extIdc);
+
+    // 2. Auto-detect from TikTok API
     try {
       const idcRes = await fetch('https://www.tiktok.com/api/user/detail/?uniqueId=' + tiktokUsername, {
         headers: {
           'Cookie': `sessionid=${sessionIdCookie}`,
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
+        },
+        signal: AbortSignal.timeout(5000)
       });
       const setCookie = idcRes.headers.get('set-cookie') || '';
       const idcMatch = setCookie.match(/tt-target-idc=([^;]+)/);
-      if (idcMatch && !candidates.includes(idcMatch[1])) {
-        candidates.unshift(idcMatch[1]); // put detected region first
+      if (idcMatch?.[1] && !candidates.includes(idcMatch[1])) {
+        candidates.unshift(idcMatch[1]);
         console.log(`[${sessionId.slice(0,8)}] 🌍 Auto-detected region: ${idcMatch[1]}`);
       }
     } catch {}
 
+    // 3. All known regions as fallback
+    for (const r of IDC_REGIONS) {
+      if (!candidates.includes(r)) candidates.push(r);
+    }
+
+    // Try each candidate
     for (const idc of candidates) {
       console.log(`[${sessionId.slice(0,8)}] 🔄 Trying region: ${idc}`);
-      const opts = { sessionId: sessionIdCookie, 'tt-target-idc': idc };
-      const conn = new WebcastPushConnection(tiktokUsername, opts);
       try {
-        const state = await conn.connect();
-        // ✅ Success! Attach all event listeners and mark connected
-        console.log(`[${sessionId.slice(0,8)}] ✅ Connected with region ${idc}! Room: ${state.roomId}`);
+        const { conn, state } = await tryRegion(sessionIdCookie, idc);
+        console.log(`[${sessionId.slice(0,8)}] ✅ Connected! Region: ${idc} Room: ${state.roomId}`);
         session.tiktokConn = conn;
         session.tiktokUsername = tiktokUsername;
         session.isConnected = true;
         io.to(sessionId).emit('status', { connected: true, username: tiktokUsername, roomId: state.roomId });
-
-        conn.on('chat', data => {
-          console.log(`[${sessionId.slice(0,8)}] 📨 Raw chat: ${data.uniqueId}: ${data.comment}`);
-          handleChatMessage(data, sessionId);
-        });
-        conn.on('gift', data => {
-          session.stats.gifts++;
-          const event = { id: Date.now(), type: 'gift', username: data.uniqueId, giftName: data.giftName || 'a gift', timestamp: new Date().toLocaleTimeString() };
-          session.messages.unshift(event);
-          io.to(sessionId).emit('event', event);
-          io.to(sessionId).emit('stats', session.stats);
-        });
-        conn.on('follow', data => {
-          session.stats.followers++;
-          const event = { id: Date.now(), type: 'follow', username: data.uniqueId, timestamp: new Date().toLocaleTimeString() };
-          session.messages.unshift(event);
-          io.to(sessionId).emit('event', event);
-          io.to(sessionId).emit('stats', session.stats);
-        });
-        conn.on('like', data => {
-          session.stats.likes += data.likeCount || 1;
-          io.to(sessionId).emit('stats', session.stats);
-        });
-        conn.on('disconnected', () => {
-          session.isConnected = false;
-          io.to(sessionId).emit('status', { connected: false, error: 'Stream disconnected' });
-        });
-        conn.on('error', err => {
-          session.isConnected = false;
-          io.to(sessionId).emit('status', { connected: false, error: err.message });
-        });
-        return { success: true }; // ✅ Return success
+        attachListeners(conn);
+        return { success: true };
       } catch (err) {
         console.log(`[${sessionId.slice(0,8)}] ❌ Region ${idc} failed: ${err.message}`);
-        try { conn.disconnect(); } catch {}
-        // continue to next region
       }
     }
-    // All regions failed
-    const errMsg = 'Could not connect. Make sure you are LIVE on TikTok.';
-    console.error(`[${sessionId.slice(0,8)}] ❌ All regions failed`);
+
+    // All regions with sessionId failed — try once without any sessionId (public streams)
+    console.log(`[${sessionId.slice(0,8)}] 🔄 Trying without sessionId (public stream)...`);
+    try {
+      const conn = new WebcastPushConnection(tiktokUsername, {});
+      const state = await conn.connect();
+      console.log(`[${sessionId.slice(0,8)}] ✅ Connected (no session)! Room: ${state.roomId}`);
+      session.tiktokConn = conn;
+      session.tiktokUsername = tiktokUsername;
+      session.isConnected = true;
+      io.to(sessionId).emit('status', { connected: true, username: tiktokUsername, roomId: state.roomId });
+      attachListeners(conn);
+      return { success: true };
+    } catch (err) {
+      console.log(`[${sessionId.slice(0,8)}] ❌ No-session fallback failed: ${err.message}`);
+    }
+
+    const errMsg = 'Could not connect. Make sure you are LIVE on TikTok right now.';
+    console.error(`[${sessionId.slice(0,8)}] ❌ All connection attempts failed`);
     io.to(sessionId).emit('status', { connected: false, error: errMsg });
-    return { success: false, error: errMsg }; // ✅ Return failure
+    return { success: false, error: errMsg };
   }
 
   if (tiktokSessionId) {
-    return tryConnect(IDC_REGIONS, tiktokSessionId, ttTargetIdc);
+    return tryConnect(tiktokSessionId, ttTargetIdc);
   } else {
-    // No sessionId — try without it (public streams only)
-    const conn = new WebcastPushConnection(tiktokUsername, {});
+    // No sessionId at all — try public connection directly
+    console.log(`[${sessionId.slice(0,8)}] 🔄 No sessionId, trying public connection...`);
     try {
+      const conn = new WebcastPushConnection(tiktokUsername, {});
       const state = await conn.connect();
       session.tiktokConn = conn;
       session.tiktokUsername = tiktokUsername;
       session.isConnected = true;
       io.to(sessionId).emit('status', { connected: true, username: tiktokUsername, roomId: state.roomId });
-
-      conn.on('chat', data => handleChatMessage(data, sessionId));
-      conn.on('gift', data => {
-        session.stats.gifts++;
-        const event = { id: Date.now(), type: 'gift', username: data.uniqueId, giftName: data.giftName || 'a gift', timestamp: new Date().toLocaleTimeString() };
-        session.messages.unshift(event);
-        io.to(sessionId).emit('event', event);
-        io.to(sessionId).emit('stats', session.stats);
-      });
-      conn.on('disconnected', () => {
-        session.isConnected = false;
-        io.to(sessionId).emit('status', { connected: false, error: 'Stream disconnected' });
-      });
-      conn.on('error', err => {
-        session.isConnected = false;
-        io.to(sessionId).emit('status', { connected: false, error: err.message });
-      });
+      attachListeners(conn);
       return { success: true };
     } catch (err) {
       session.isConnected = false;
@@ -638,4 +666,16 @@ httpServer.listen(PORT, () => {
 ║  Version:    ${CURRENT_VERSION}                             ║
 ╚══════════════════════════════════════════════════╝
   `);
+});
+
+// ================================================================
+//  GLOBAL CRASH GUARDS — keeps Railway alive on unexpected errors
+// ================================================================
+process.on('uncaughtException', (err) => {
+  console.error('🔥 Uncaught Exception (server kept alive):', err.message);
+  console.error(err.stack);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('🔥 Unhandled Promise Rejection (server kept alive):', reason);
 });
