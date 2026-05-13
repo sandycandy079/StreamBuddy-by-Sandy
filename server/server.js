@@ -236,6 +236,7 @@ async function connectToTikTok(sessionId, tiktokUsername, tiktokSessionId, ttTar
 
   if (session.tiktokConn) {
     try { session.tiktokConn.disconnect(); } catch {}
+    session.tiktokConn = null;
   }
 
   console.log(`[${sessionId.slice(0,8)}] 🔗 Connecting to @${tiktokUsername}...`);
@@ -273,7 +274,7 @@ async function connectToTikTok(sessionId, tiktokUsername, tiktokSessionId, ttTar
       const conn = new WebcastPushConnection(tiktokUsername, opts);
       try {
         const state = await conn.connect();
-        // Success!
+        // ✅ Success! Attach all event listeners and mark connected
         console.log(`[${sessionId.slice(0,8)}] ✅ Connected with region ${idc}! Room: ${state.roomId}`);
         session.tiktokConn = conn;
         session.tiktokUsername = tiktokUsername;
@@ -307,9 +308,10 @@ async function connectToTikTok(sessionId, tiktokUsername, tiktokSessionId, ttTar
           io.to(sessionId).emit('status', { connected: false, error: 'Stream disconnected' });
         });
         conn.on('error', err => {
+          session.isConnected = false;
           io.to(sessionId).emit('status', { connected: false, error: err.message });
         });
-        return; // done!
+        return { success: true }; // ✅ Return success
       } catch (err) {
         console.log(`[${sessionId.slice(0,8)}] ❌ Region ${idc} failed: ${err.message}`);
         try { conn.disconnect(); } catch {}
@@ -317,27 +319,47 @@ async function connectToTikTok(sessionId, tiktokUsername, tiktokSessionId, ttTar
       }
     }
     // All regions failed
+    const errMsg = 'Could not connect. Make sure you are LIVE on TikTok.';
     console.error(`[${sessionId.slice(0,8)}] ❌ All regions failed`);
-    io.to(sessionId).emit('status', { connected: false, error: 'Could not connect. Make sure you are LIVE on TikTok.' });
+    io.to(sessionId).emit('status', { connected: false, error: errMsg });
+    return { success: false, error: errMsg }; // ✅ Return failure
   }
 
   if (tiktokSessionId) {
-    tryConnect(IDC_REGIONS, tiktokSessionId, ttTargetIdc);
+    return tryConnect(IDC_REGIONS, tiktokSessionId, ttTargetIdc);
   } else {
-    // No sessionId — try without it
+    // No sessionId — try without it (public streams only)
     const conn = new WebcastPushConnection(tiktokUsername, {});
-    session.tiktokConn = conn;
-    session.tiktokUsername = tiktokUsername;
-    conn.connect()
-      .then(state => {
-        session.isConnected = true;
-        io.to(sessionId).emit('status', { connected: true, username: tiktokUsername, roomId: state.roomId });
-      })
-      .catch(err => {
+    try {
+      const state = await conn.connect();
+      session.tiktokConn = conn;
+      session.tiktokUsername = tiktokUsername;
+      session.isConnected = true;
+      io.to(sessionId).emit('status', { connected: true, username: tiktokUsername, roomId: state.roomId });
+
+      conn.on('chat', data => handleChatMessage(data, sessionId));
+      conn.on('gift', data => {
+        session.stats.gifts++;
+        const event = { id: Date.now(), type: 'gift', username: data.uniqueId, giftName: data.giftName || 'a gift', timestamp: new Date().toLocaleTimeString() };
+        session.messages.unshift(event);
+        io.to(sessionId).emit('event', event);
+        io.to(sessionId).emit('stats', session.stats);
+      });
+      conn.on('disconnected', () => {
+        session.isConnected = false;
+        io.to(sessionId).emit('status', { connected: false, error: 'Stream disconnected' });
+      });
+      conn.on('error', err => {
         session.isConnected = false;
         io.to(sessionId).emit('status', { connected: false, error: err.message });
       });
-
+      return { success: true };
+    } catch (err) {
+      session.isConnected = false;
+      const errMsg = err.message || 'Connection failed. Make sure you are LIVE on TikTok.';
+      io.to(sessionId).emit('status', { connected: false, error: errMsg });
+      return { success: false, error: errMsg };
+    }
   }
 }
 
@@ -387,7 +409,7 @@ app.post('/api/validate', (req, res) => {
 });
 
 // Connect to TikTok live
-app.post('/api/connect', (req, res) => {
+app.post('/api/connect', async (req, res) => {
   const { sessionId, tiktokUsername, tiktokSessionId, ttTargetIdc } = req.body;
 
   // Reload users from disk on every request (survives Railway restarts)
@@ -411,8 +433,13 @@ app.post('/api/connect', (req, res) => {
   const lic = licenses[users[sessionId].licenseKey];
   session.config = lic?.config || getDefaultConfig(lic);
 
-  connectToTikTok(sessionId, tiktokUsername, tiktokSessionId, ttTargetIdc);
-  res.json({ success: true });
+  // ✅ FIX: Await the TikTok connection so we return real success/failure
+  const result = await connectToTikTok(sessionId, tiktokUsername, tiktokSessionId, ttTargetIdc);
+  if (result.success) {
+    res.json({ success: true });
+  } else {
+    res.json({ success: false, error: result.error });
+  }
 });
 
 // Disconnect
@@ -549,8 +576,8 @@ app.get('/admin/stats', adminAuth, (req, res) => {
   res.json({ total, active, expired, online });
 });
 
-// Admin dashboard page
-app.get('/admin', adminAuth, (req, res) => {
+// Admin dashboard page — served without auth (login is handled client-side)
+app.get('/admin', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'admin.html'));
 });
 
