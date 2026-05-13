@@ -100,14 +100,14 @@ function getSession(sessionId) {
 // ================================================================
 function fillTemplate(template, username = '', streamerInfo = {}) {
   return template
-    .replace(/{Numb}/g, streamerInfo.name || '')
-    .replace(/{28}/g, streamerInfo.age || '')
-    .replace(/{Iphone 17 Pro Max}/g, streamerInfo.phone || '')
-    .replace(/{PC:LENOVO LOQ 15IRX10 | Camera:Sony A6400 | Headset:Razer Kraken Lite}/g, streamerInfo.setup || '')
-    .replace(/{Nepal}/g, streamerInfo.location || '')
-    .replace(/{Since January}/g, streamerInfo.streamingFor || '')
-    .replace(/{about}/g, streamerInfo.about || '')
-    .replace(/{lost_inhis_faith}/g, username);
+    .replace(/\{name\}/g, streamerInfo.name || '')
+    .replace(/\{age\}/g, streamerInfo.age || '')
+    .replace(/\{phone\}/g, streamerInfo.phone || '')
+    .replace(/\{setup\}/g, streamerInfo.setup || '')
+    .replace(/\{location\}/g, streamerInfo.location || '')
+    .replace(/\{streamingFor\}/g, streamerInfo.streamingFor || '')
+    .replace(/\{about\}/g, streamerInfo.about || '')
+    .replace(/\{username\}/g, username);
 }
 
 function checkQuickReply(message, username, quickReplies, streamerInfo) {
@@ -440,6 +440,42 @@ app.get('/api/stats/:sessionId', (req, res) => {
 // Overlay page (per user)
 app.get('/overlay/:sessionId', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'overlay.html'));
+});
+
+// Save user settings (keywords, streamer info, overlay config)
+app.post('/api/settings', (req, res) => {
+  const { sessionId, streamerInfo, quickReplies, bot, overlayConfig } = req.body;
+  users = readDB('users');
+  licenses = readDB('licenses');
+  if (!sessionId || !users[sessionId]) return res.json({ success: false, error: 'Invalid session' });
+
+  const licKey = users[sessionId].licenseKey;
+  if (!licenses[licKey]) return res.json({ success: false, error: 'License not found' });
+
+  // Save to license config
+  licenses[licKey].config = {
+    streamerInfo: streamerInfo || {},
+    quickReplies: quickReplies || [],
+    bot: bot || {},
+    overlayConfig: overlayConfig || {}
+  };
+  writeDB('licenses', licenses);
+
+  // Update active session config
+  const session = activeConnections.get(sessionId);
+  if (session) session.config = licenses[licKey].config;
+
+  res.json({ success: true });
+});
+
+// Get overlay config for a session (used by overlay.html)
+app.get('/api/overlay-config/:sessionId', (req, res) => {
+  users = readDB('users');
+  licenses = readDB('licenses');
+  const user = users[req.params.sessionId];
+  if (!user) return res.json({});
+  const lic = licenses[user.licenseKey];
+  res.json(lic?.config?.overlayConfig || {});
 });
 
 // ================================================================
