@@ -497,6 +497,22 @@ app.get('/overlay/:sessionId', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'overlay.html'));
 });
 
+// Get user settings (called by settings page on load)
+app.get('/api/settings/:sessionId', (req, res) => {
+  users = readDB('users');
+  licenses = readDB('licenses');
+  const user = users[req.params.sessionId];
+  if (!user) return res.json({});
+  const lic = licenses[user.licenseKey];
+  const config = lic?.config || {};
+  res.json({
+    streamerInfo: config.streamerInfo || {},
+    quickReplies: config.quickReplies || [],
+    bot: config.bot || {},
+    overlayConfig: config.overlayConfig || {}
+  });
+});
+
 // Save user settings (keywords, streamer info, overlay config)
 app.post('/api/settings', (req, res) => {
   const { sessionId, streamerInfo, quickReplies, bot, overlayConfig } = req.body;
