@@ -497,22 +497,6 @@ app.get('/overlay/:sessionId', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'overlay.html'));
 });
 
-// Get user settings (called by settings page on load)
-app.get('/api/settings/:sessionId', (req, res) => {
-  users = readDB('users');
-  licenses = readDB('licenses');
-  const user = users[req.params.sessionId];
-  if (!user) return res.json({});
-  const lic = licenses[user.licenseKey];
-  const config = lic?.config || {};
-  res.json({
-    streamerInfo: config.streamerInfo || {},
-    quickReplies: config.quickReplies || [],
-    bot: config.bot || {},
-    overlayConfig: config.overlayConfig || {}
-  });
-});
-
 // Save user settings (keywords, streamer info, overlay config)
 app.post('/api/settings', (req, res) => {
   const { sessionId, streamerInfo, quickReplies, bot, overlayConfig } = req.body;
@@ -537,6 +521,34 @@ app.post('/api/settings', (req, res) => {
   if (session) session.config = licenses[licKey].config;
 
   res.json({ success: true });
+});
+
+// Test reply — called from settings page test mode
+app.post('/api/test-reply', async (req, res) => {
+  const { sessionId, message, username } = req.body;
+  if (!sessionId) return res.json({ reply: null });
+
+  users = readDB('users');
+  licenses = readDB('licenses');
+  const user = users[sessionId];
+  if (!user) return res.json({ reply: null });
+
+  const lic = licenses[user.licenseKey];
+  const config = lic?.config || {};
+
+  // Check keyword match
+  const lower = message.toLowerCase();
+  const kwMatch = (config.quickReplies || []).find(kw =>
+    kw.keywords.some(k => lower.includes(k.toLowerCase()))
+  );
+  if (kwMatch) {
+    const reply = fillTemplate(kwMatch.reply, username || 'TestViewer', config.streamerInfo || {});
+    return res.json({ reply, replyType: 'quick' });
+  }
+
+  // AI reply
+  const reply = await generateAIReply(message, username || 'TestViewer', config);
+  res.json({ reply: reply || null, replyType: 'ai' });
 });
 
 // Get overlay config for a session (used by overlay.html)
