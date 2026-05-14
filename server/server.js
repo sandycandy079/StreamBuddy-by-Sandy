@@ -541,14 +541,27 @@ app.post('/api/test-reply', async (req, res) => {
   const kwMatch = (config.quickReplies || []).find(kw =>
     kw.keywords.some(k => lower.includes(k.toLowerCase()))
   );
+
+  let reply, replyType;
   if (kwMatch) {
-    const reply = fillTemplate(kwMatch.reply, username || 'TestViewer', config.streamerInfo || {});
-    return res.json({ reply, replyType: 'quick' });
+    reply = fillTemplate(kwMatch.reply, username || 'TestViewer', config.streamerInfo || {});
+    replyType = 'quick';
+  } else {
+    reply = await generateAIReply(message, username || 'TestViewer', config);
+    replyType = 'ai';
   }
 
-  // AI reply
-  const reply = await generateAIReply(message, username || 'TestViewer', config);
-  res.json({ reply: reply || null, replyType: 'ai' });
+  if (reply) {
+    // ✅ Emit to the overlay via Socket.IO so it shows in OBS/TikTok Studio
+    io.to(sessionId).emit('test-chat', {
+      username: username || 'TestViewer',
+      message,
+      reply,
+      replyType
+    });
+  }
+
+  res.json({ reply: reply || null, replyType });
 });
 
 // Get overlay config for a session (used by overlay.html)
@@ -558,6 +571,7 @@ app.get('/api/overlay-config/:sessionId', (req, res) => {
   const user = users[req.params.sessionId];
   if (!user) return res.json({});
   const lic = licenses[user.licenseKey];
+  // ✅ Return full overlayConfig including template, typewriter, messenger
   res.json(lic?.config?.overlayConfig || {});
 });
 
