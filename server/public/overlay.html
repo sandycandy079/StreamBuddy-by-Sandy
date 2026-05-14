@@ -2,249 +2,230 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Stream Overlay</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: transparent !important; overflow: hidden; width: 1080px; height: 1920px; font-family: 'Segoe UI', Arial, sans-serif; }
 
-  /* TRANSPARENT background — this is key for overlay */
-  body {
-    background: transparent !important;
-    overflow: hidden;
-    width: 1080px;
-    height: 1920px;
-    font-family: 'Segoe UI', Arial, sans-serif;
+  /* ═══════════════════════════════
+     TEMPLATE 1: TIKTOK
+  ═══════════════════════════════ */
+  #tpl-tiktok {
+    position: absolute; bottom: 120px; left: 40px;
+    max-width: 580px; background: rgba(0,0,0,0.82);
+    border: 2px solid rgba(254,44,85,0.8); border-radius: 16px;
+    overflow: hidden; backdrop-filter: blur(12px);
+    box-shadow: 0 8px 40px rgba(0,0,0,0.6);
+    pointer-events: none; opacity: 0; transform: translateY(80px);
+    transition: opacity 0.4s ease, transform 0.5s cubic-bezier(0.34,1.56,0.64,1);
   }
+  #tpl-tiktok.show { opacity: 1; transform: translateY(0); }
+  #tpl-tiktok.hide { opacity: 0; transform: translateY(-30px); transition: opacity 0.35s ease-in, transform 0.4s ease-in; }
+  .tk-progress { height: 3px; background: rgba(254,44,85,0.5); transform-origin: left; }
+  .tk-header { display: flex; align-items: center; gap: 10px; padding: 10px 16px; background: rgba(254,44,85,0.9); }
+  .tk-icon { width: 18px; height: 18px; flex-shrink: 0; }
+  .tk-question { font-size: 13px; font-weight: 600; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 460px; opacity: 0.95; }
+  .tk-body { padding: 14px 18px 16px; }
+  .tk-reply { font-size: 22px; font-weight: 700; color: #fff; line-height: 1.4; text-shadow: 0 2px 8px rgba(0,0,0,0.5); }
+  .tk-badge { display: inline-flex; align-items: center; gap: 5px; margin-top: 8px; padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 600; background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.7); }
+  .tk-dot { width: 6px; height: 6px; border-radius: 50%; background: #25f4ee; animation: blink 1.2s ease-in-out infinite; }
 
-  /* ── Reply Card ── */
-  .reply-card {
-    position: absolute;
-    bottom: 120px;
-    left: 40px;
-    max-width: 580px;
-    background: rgba(0, 0, 0, 0.82);
-    border: 2px solid rgba(254, 44, 85, 0.8);
-    border-radius: 16px;
-    padding: 0;
-    overflow: hidden;
-    backdrop-filter: blur(12px);
-    box-shadow: 0 8px 40px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.05);
-    transform: translateY(120px);
-    opacity: 0;
-    transition: transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.4s ease;
-    pointer-events: none;
+  /* ═══════════════════════════════
+     TEMPLATE 2: TYPEWRITER
+  ═══════════════════════════════ */
+  #tpl-typewriter {
+    position: absolute; bottom: 120px; left: 40px;
+    max-width: 900px; pointer-events: none;
+    opacity: 0; transition: opacity 0.6s ease;
   }
+  #tpl-typewriter.show { opacity: 1; }
+  #tpl-typewriter.hide { opacity: 0; transition: opacity 0.4s ease-in; }
+  .tw-question { font-size: 20px; font-weight: 600; color: rgba(255,255,255,0.55); margin-bottom: 12px; }
+  .tw-text { font-family: 'Courier New', monospace; font-size: 42px; font-weight: 700; color: #fff; line-height: 1.3; text-shadow: 0 0 20px rgba(255,255,255,0.4), 0 0 40px rgba(255,255,255,0.15); white-space: pre-wrap; word-break: break-word; }
+  .tw-cursor { display: inline-block; width: 3px; background: #fff; margin-left: 3px; vertical-align: text-bottom; animation: cur-blink 0.8s step-end infinite; }
 
-  .reply-card.show {
-    transform: translateY(0);
-    opacity: 1;
+  /* ═══════════════════════════════
+     TEMPLATE 3: MESSENGER
+  ═══════════════════════════════ */
+  #tpl-messenger {
+    position: absolute; bottom: 120px; left: 40px;
+    width: 560px; pointer-events: none;
+    opacity: 0; transform: translateY(60px) scale(0.95);
+    transition: opacity 0.4s ease, transform 0.45s cubic-bezier(0.34,1.4,0.64,1);
   }
+  #tpl-messenger.show { opacity: 1; transform: translateY(0) scale(1); }
+  #tpl-messenger.hide { opacity: 0; transform: translateY(-20px); transition: opacity 0.35s ease-in, transform 0.35s ease-in; }
+  .msg-wrap { display: flex; flex-direction: column; gap: 10px; }
+  .msg-q-row { display: flex; align-items: flex-end; gap: 10px; }
+  .msg-avatar { width: 40px; height: 40px; border-radius: 50%; background: linear-gradient(135deg, #25f4ee, #0066cc); display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; box-shadow: 0 2px 8px rgba(0,0,0,0.4); }
+  .msg-q-bubble { background: rgba(255,255,255,0.18); backdrop-filter: blur(10px); border-radius: 4px 20px 20px 20px; padding: 12px 16px; max-width: 85%; box-shadow: 0 2px 12px rgba(0,0,0,0.3); }
+  .msg-q-name { font-size: 13px; font-weight: 700; color: rgba(255,255,255,0.6); margin-bottom: 5px; }
+  .msg-q-text { font-size: 20px; color: rgba(255,255,255,0.95); font-weight: 500; line-height: 1.3; }
+  .msg-r-row { display: flex; justify-content: flex-end; }
+  .msg-r-bubble { background: #0b84ff; border-radius: 20px 20px 4px 20px; padding: 14px 18px; max-width: 85%; box-shadow: 0 4px 20px rgba(11,132,255,0.4); }
+  .msg-r-text { font-size: 22px; font-weight: 700; color: #fff; line-height: 1.35; }
+  .msg-meta-row { display: flex; justify-content: flex-end; align-items: center; gap: 6px; }
+  .msg-time { font-size: 13px; color: rgba(255,255,255,0.45); }
+  .msg-read { font-size: 13px; color: rgba(255,255,255,0.45); }
 
-  .reply-card.hide {
-    transform: translateY(-30px);
-    opacity: 0;
-    transition: transform 0.4s ease-in, opacity 0.35s ease-in;
-  }
-
-  /* Header bar */
-  .card-header {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 10px 16px;
-    background: rgba(254, 44, 85, 0.9);
-  }
-
-  .tiktok-icon {
-    width: 20px;
-    height: 20px;
-    flex-shrink: 0;
-  }
-
-  .question-label {
-    font-size: 13px;
-    font-weight: 600;
-    color: #fff;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 460px;
-    opacity: 0.95;
-  }
-
-  /* Body */
-  .card-body {
-    padding: 14px 18px 16px;
-  }
-
-  .reply-text {
-    font-size: 22px;
-    font-weight: 700;
-    color: #ffffff;
-    line-height: 1.4;
-    text-shadow: 0 2px 8px rgba(0,0,0,0.5);
-    letter-spacing: -0.2px;
-  }
-
-  /* Badge */
-  .reply-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    margin-top: 8px;
-    padding: 3px 10px;
-    border-radius: 999px;
-    font-size: 11px;
-    font-weight: 600;
-    background: rgba(255,255,255,0.1);
-    color: rgba(255,255,255,0.7);
-    letter-spacing: 0.04em;
-  }
-
-  .badge-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: #25f4ee;
-    animation: blink 1.2s ease-in-out infinite;
-  }
-
-  @keyframes blink {
-    0%,100% { opacity: 1; }
-    50% { opacity: 0.3; }
-  }
-
-
-
-  /* ── Progress bar (auto-dismiss timer) ── */
-  .progress-bar {
-    height: 3px;
-    background: rgba(254, 44, 85, 0.5);
-    border-radius: 0 0 0 0;
-    transform-origin: left;
-    transform: scaleX(1);
-    transition: transform linear;
-  }
-
-  /* ── Queue indicator ── */
-  .queue-dot {
-    position: absolute;
-    bottom: 120px;
-    left: 40px;
-    display: flex;
-    gap: 6px;
-    opacity: 0;
-    transition: opacity 0.3s;
-  }
-  .queue-dot.show { opacity: 1; }
-  .qdot {
-    width: 8px; height: 8px;
-    border-radius: 50%;
-    background: rgba(254,44,85,0.6);
-  }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+  @keyframes cur-blink { 0%,100%{opacity:1} 50%{opacity:0} }
 </style>
 </head>
 <body>
 
-<!-- Reply Card -->
-<div class="reply-card" id="replyCard">
-  <div class="progress-bar" id="progressBar"></div>
-  <div class="card-header">
-    <svg class="tiktok-icon" viewBox="0 0 24 24" fill="white">
-      <path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-2.88 2.5 2.89 2.89 0 0 1-2.89-2.89 2.89 2.89 0 0 1 2.89-2.89c.28 0 .54.04.79.1V9.01a6.32 6.32 0 0 0-.79-.05 6.34 6.34 0 0 0-6.34 6.34 6.34 6.34 0 0 0 6.34 6.34 6.34 6.34 0 0 0 6.33-6.34V8.69a8.23 8.23 0 0 0 4.81 1.54V6.78a4.85 4.85 0 0 1-1.04-.09z"/>
-    </svg>
-    <div class="question-label" id="questionLabel">@viewer asked...</div>
+<!-- TikTok card -->
+<div id="tpl-tiktok">
+  <div class="tk-progress" id="tkProgress"></div>
+  <div class="tk-header" id="tkHeader">
+    <svg class="tk-icon" viewBox="0 0 24 24" fill="white"><path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-2.88 2.5 2.89 2.89 0 0 1-2.89-2.89 2.89 2.89 0 0 1 2.89-2.89c.28 0 .54.04.79.1V9.01a6.32 6.32 0 0 0-.79-.05 6.34 6.34 0 0 0-6.34 6.34 6.34 6.34 0 0 0 6.34 6.34 6.34 6.34 0 0 0 6.33-6.34V8.69a8.23 8.23 0 0 0 4.81 1.54V6.78a4.85 4.85 0 0 1-1.04-.09z"/></svg>
+    <div class="tk-question" id="tkQuestion">@viewer asked...</div>
   </div>
-  <div class="card-body">
-    <div class="reply-text" id="replyText">Reply text goes here</div>
-    <div class="reply-badge">
-      <div class="badge-dot"></div>
-      <span id="replyBadge">AI Reply</span>
+  <div class="tk-body">
+    <div class="tk-reply" id="tkReply">Reply goes here</div>
+    <div class="tk-badge"><div class="tk-dot" id="tkDot"></div><span id="tkBadge">AI Reply</span></div>
+  </div>
+</div>
+
+<!-- Typewriter card -->
+<div id="tpl-typewriter">
+  <div class="tw-question" id="twQuestion"></div>
+  <div class="tw-text"><span id="twDisplayed"></span><span class="tw-cursor" id="twCursor"></span></div>
+</div>
+
+<!-- Messenger card -->
+<div id="tpl-messenger">
+  <div class="msg-wrap">
+    <div class="msg-q-row">
+      <div class="msg-avatar">👤</div>
+      <div class="msg-q-bubble">
+        <div class="msg-q-name" id="msgQName">@viewer</div>
+        <div class="msg-q-text" id="msgQText">Question</div>
+      </div>
+    </div>
+    <div class="msg-r-row">
+      <div class="msg-r-bubble" id="msgRBubble">
+        <div class="msg-r-text" id="msgRText">Reply</div>
+      </div>
+    </div>
+    <div class="msg-meta-row" id="msgMeta">
+      <span class="msg-time" id="msgTime"></span>
+      <span class="msg-read" id="msgRead">✓✓</span>
     </div>
   </div>
 </div>
 
-
 <script>
 const SERVER_URL = 'https://streambuddy-by-sandy-production.up.railway.app';
-
-// ── Session ID from URL ───────────────────────────────────────
 const SESSION_ID = new URLSearchParams(window.location.search).get('session') ||
   window.location.pathname.split('/').pop();
 
-// ── Fetch/config (no socket needed) ──────────────────────────
-let overlayConfig = {};
+let cfg = {};
+let REPLY_DURATION = 7000;
+let currentTemplate = 'tiktok';
+let twTimer = null;
 
+// ── Config ────────────────────────────────────────────────────
 async function loadConfig() {
   try {
     const res = await fetch(`${SERVER_URL}/api/overlay-config/${SESSION_ID}`);
-    overlayConfig = await res.json();
-    applyConfig(overlayConfig);
+    cfg = await res.json();
+    applyConfig(cfg);
   } catch {}
 }
 
-function applyConfig(cfg) {
-  if (!cfg) return;
-  const card = document.getElementById('replyCard');
-  const header = document.querySelector('.card-header');
-  const replyText = document.querySelector('.reply-text');
-  const progressBar = document.getElementById('progressBar');
-  const badgeDot = document.querySelector('.badge-dot');
+function applyConfig(c) {
+  if (!c) return;
+  const o = c.overlay || {};
+  const f = c.fonts || {};
+  const a = c.animation || {};
+  const tw = c.typewriter || {};
+  const msg = c.messenger || {};
 
-  const o = cfg.overlay || {};
-  const f = cfg.fonts || {};
-  const a = cfg.animation || {};
+  currentTemplate = o.template || 'tiktok';
 
-  if (o.accentColor) {
-    card.style.borderColor = o.accentColor + 'cc';
-    header.style.background = o.accentColor + 'e6';
-  }
-  if (o.bgOpacity !== undefined) card.style.background = `rgba(0,0,0,${o.bgOpacity})`;
-  if (o.blurStrength !== undefined) card.style.backdropFilter = `blur(${o.blurStrength}px)`;
-  if (o.borderRadius !== undefined) card.style.borderRadius = o.borderRadius + 'px';
-  if (o.cardWidth !== undefined) card.style.maxWidth = o.cardWidth + 'px';
+  // Canvas size
+  if (o.orientation === 'landscape') { document.body.style.width = '1920px'; document.body.style.height = '1080px'; }
+  else { document.body.style.width = '1080px'; document.body.style.height = '1920px'; }
 
-  // ✅ Orientation — resize the canvas for OBS
-  const orientation = o.orientation || 'vertical';
-  if (orientation === 'landscape') {
-    document.body.style.width  = '1920px';
-    document.body.style.height = '1080px';
-  } else {
-    // vertical — TikTok Live 9:16
-    document.body.style.width  = '1080px';
-    document.body.style.height = '1920px';
-  }
+  // Layout position — apply to all 3 templates
+  ['tpl-tiktok','tpl-typewriter','tpl-messenger'].forEach(id => {
+    const el = document.getElementById(id);
+    const layout = o.layout || 'bottom-left';
+    el.style.top = 'auto'; el.style.bottom = 'auto'; el.style.left = 'auto'; el.style.right = 'auto';
+    if (layout === 'bottom-left')   { el.style.bottom = '120px'; el.style.left = '40px'; }
+    if (layout === 'bottom-right')  { el.style.bottom = '120px'; el.style.right = '40px'; }
+    if (layout === 'top-left')      { el.style.top = '80px';  el.style.left = '40px'; }
+    if (layout === 'top-right')     { el.style.top = '80px';  el.style.right = '40px'; }
+    if (layout === 'center-bottom') { el.style.bottom = '120px'; el.style.left = '50%'; el.style.marginLeft = '-280px'; }
+  });
 
-  const layout = o.layout || 'bottom-left';
-  card.style.bottom = 'auto'; card.style.top = 'auto';
-  card.style.left = 'auto'; card.style.right = 'auto';
-  if (layout === 'bottom-left')   { card.style.bottom = '120px'; card.style.left = '40px'; }
-  if (layout === 'bottom-right')  { card.style.bottom = '120px'; card.style.right = '40px'; }
-  if (layout === 'top-left')      { card.style.top = '40px'; card.style.left = '40px'; }
-  if (layout === 'top-right')     { card.style.top = '40px'; card.style.right = '40px'; }
-  if (layout === 'center-bottom') { card.style.bottom = '120px'; card.style.left = '50%'; card.style.transform += ' translateX(-50%)'; }
-
-  if (f.fontFamily) replyText.style.fontFamily = f.fontFamily;
-  if (f.fontSize) replyText.style.fontSize = f.fontSize + 'px';
-  if (f.fontWeight) replyText.style.fontWeight = f.fontWeight;
-  if (f.textColor) replyText.style.color = f.textColor;
-  if (f.letterSpacing !== undefined) replyText.style.letterSpacing = f.letterSpacing + 'px';
-  if (f.lineHeight) replyText.style.lineHeight = f.lineHeight;
-
-  if (a.showProgress === false && progressBar) progressBar.style.display = 'none';
-  if (a.showBadgeDot === false && badgeDot) badgeDot.style.display = 'none';
-  if (a.showBlur === false) card.style.backdropFilter = 'none';
-  if (a.showGlow === false) card.style.boxShadow = '0 8px 40px rgba(0,0,0,0.6)';
+  // TikTok card
+  const tkCard = document.getElementById('tpl-tiktok');
+  const tkHeader = document.getElementById('tkHeader');
+  const tkProgress = document.getElementById('tkProgress');
+  const tkReply = document.getElementById('tkReply');
+  const tkDot = document.getElementById('tkDot');
+  const color = o.accentColor || '#fe2c55';
+  tkCard.style.borderColor = color + 'cc';
+  tkHeader.style.background = color + 'e6';
+  tkProgress.style.background = color + '80';
+  tkCard.style.background = `rgba(0,0,0,${o.bgOpacity ?? 0.82})`;
+  tkCard.style.backdropFilter = a.showBlur === false ? 'none' : `blur(${o.blurStrength ?? 12}px)`;
+  tkCard.style.borderRadius = (o.borderRadius ?? 16) + 'px';
+  tkCard.style.maxWidth = (o.cardWidth ?? 580) + 'px';
+  tkCard.style.boxShadow = a.showGlow === false
+    ? '0 8px 40px rgba(0,0,0,0.6)'
+    : `0 8px 40px rgba(0,0,0,0.6), 0 0 20px ${color}30`;
+  tkProgress.style.display = a.showProgress === false ? 'none' : '';
+  tkDot.style.display = a.showBadgeDot === false ? 'none' : '';
+  if (f.fontFamily) tkReply.style.fontFamily = f.fontFamily;
+  if (f.fontSize)   tkReply.style.fontSize = f.fontSize + 'px';
+  if (f.fontWeight) tkReply.style.fontWeight = f.fontWeight;
+  if (f.textColor)  tkReply.style.color = f.textColor;
+  if (f.letterSpacing !== undefined) tkReply.style.letterSpacing = f.letterSpacing + 'px';
+  if (f.lineHeight) tkReply.style.lineHeight = f.lineHeight;
   if (a.displayDuration) REPLY_DURATION = a.displayDuration * 1000;
+
+  // Typewriter
+  const twEl = document.getElementById('tpl-typewriter');
+  const twTextEl = document.querySelector('.tw-text');
+  const twCursorEl = document.getElementById('twCursor');
+  const twQ = document.getElementById('twQuestion');
+  const twColor = tw.color || '#ffffff';
+  const twGlow = tw.glow ?? 12;
+  twTextEl.style.fontSize = (tw.fontSize || 42) + 'px';
+  twTextEl.style.color = twColor;
+  twTextEl.style.textShadow = twGlow > 0 ? `0 0 ${twGlow}px ${twColor}70, 0 0 ${twGlow*2}px ${twColor}25` : 'none';
+  twCursorEl.style.background = twColor;
+  twCursorEl.style.height = Math.round((tw.fontSize || 42) * 0.82) + 'px';
+  twCursorEl.style.display = tw.showCursor === false ? 'none' : 'inline-block';
+  twQ.style.display = tw.showQuestion === false ? 'none' : '';
+
+  // Messenger
+  const msgRBubble = document.getElementById('msgRBubble');
+  const msgRText = document.getElementById('msgRText');
+  const msgQText = document.getElementById('msgQText');
+  const msgRead = document.getElementById('msgRead');
+  const msgTime = document.getElementById('msgTime');
+  const msgMeta = document.getElementById('msgMeta');
+  const bubbleColor = msg.bubbleColor || '#0b84ff';
+  const msgFs = (msg.fontSize || 22) + 'px';
+  msgRBubble.style.background = bubbleColor;
+  msgRBubble.style.boxShadow = `0 4px 20px ${bubbleColor}55`;
+  msgRText.style.fontSize = msgFs;
+  msgQText.style.fontSize = msgFs;
+  msgRead.style.display = msg.readReceipts === false ? 'none' : '';
+  msgTime.style.display = msg.showTimestamp === false ? 'none' : '';
+  msgMeta.style.display = (msg.readReceipts === false && msg.showTimestamp === false) ? 'none' : 'flex';
 }
 
 loadConfig();
-setInterval(loadConfig, 30000);
+setInterval(loadConfig, 15000);
 
-// ── Reply queue system ────────────────────────────────────────
+// ── Reply queue ───────────────────────────────────────────────
 const replyQueue = [];
 let replyShowing = false;
-let REPLY_DURATION = 7000;
 
 function queueReply(data) {
   replyQueue.push(data);
@@ -255,71 +236,98 @@ function showNextReply() {
   if (replyQueue.length === 0) { replyShowing = false; return; }
   replyShowing = true;
   const data = replyQueue.shift();
+  const tpl = currentTemplate || 'tiktok';
 
-  const card = document.getElementById('replyCard');
-  const questionLabel = document.getElementById('questionLabel');
-  const replyText = document.getElementById('replyText');
-  const replyBadge = document.getElementById('replyBadge');
-  const progressBar = document.getElementById('progressBar');
+  // Clear all
+  ['tpl-tiktok','tpl-typewriter','tpl-messenger'].forEach(id =>
+    document.getElementById(id).classList.remove('show','hide')
+  );
+  if (twTimer) { clearInterval(twTimer); twTimer = null; }
 
-  questionLabel.textContent = `@${data.username}: "${data.message.substring(0, 60)}${data.message.length > 60 ? '…' : ''}"`;
-  replyText.textContent = data.reply;
-  replyBadge.textContent = data.replyType === 'quick' ? '⚡ Quick Reply' : '✨ AI Reply';
-
-  card.classList.remove('hide');
-  requestAnimationFrame(() => card.classList.add('show'));
-
-  progressBar.style.transition = 'none';
-  progressBar.style.transform = 'scaleX(1)';
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      progressBar.style.transition = `transform ${REPLY_DURATION}ms linear`;
-      progressBar.style.transform = 'scaleX(0)';
-    });
-  });
+  if (tpl === 'tiktok') showTikTok(data);
+  else if (tpl === 'typewriter') showTypewriter(data);
+  else if (tpl === 'messenger') showMessenger(data);
 
   setTimeout(() => {
-    card.classList.remove('show');
-    card.classList.add('hide');
-    setTimeout(() => { card.classList.remove('hide'); showNextReply(); }, 500);
+    ['tpl-tiktok','tpl-typewriter','tpl-messenger'].forEach(id => {
+      const el = document.getElementById(id);
+      el.classList.remove('show');
+      el.classList.add('hide');
+    });
+    if (twTimer) { clearInterval(twTimer); twTimer = null; }
+    setTimeout(() => showNextReply(), 450);
   }, REPLY_DURATION);
 }
 
-// ── TEST MODE (no socket needed) ─────────────────────────────
-setTimeout(() => {
-  const urlParams = new URLSearchParams(window.location.search);
-  if (urlParams.get('test') === '1') {
-    queueReply({ username: 'viewer123', message: 'which phone are you using?', reply: 'I use iPhone 17 Pro Max for streaming! 📱', replyType: 'quick' });
-    setTimeout(() => queueReply({ username: 'fan_xyz', message: 'where are you from?', reply: "I'm from Nepal! 🌍 Beautiful country!", replyType: 'ai' }), 3000);
-  }
-}, 1000);
-
-// ── Socket.IO — loaded dynamically, initialized after script loads ──
-function initSocket() {
-  const socket = io(SERVER_URL);
-
-  // ✅ Join the session room so this overlay receives chat events
-  socket.on('connect', () => {
-    if (SESSION_ID) socket.emit('join', SESSION_ID);
-  });
-
-  socket.on('chat', data => {
-    if (data.reply) queueReply(data);
-  });
+function showTikTok(data) {
+  const card = document.getElementById('tpl-tiktok');
+  const pb = document.getElementById('tkProgress');
+  document.getElementById('tkQuestion').textContent =
+    `@${data.username}: "${data.message.substring(0,60)}${data.message.length>60?'…':''}"`;
+  document.getElementById('tkReply').textContent = data.reply;
+  document.getElementById('tkBadge').textContent = data.replyType === 'quick' ? '⚡ Quick Reply' : '✨ AI Reply';
+  pb.style.transition = 'none'; pb.style.transform = 'scaleX(1)';
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    pb.style.transition = `transform ${REPLY_DURATION}ms linear`;
+    pb.style.transform = 'scaleX(0)';
+  }));
+  requestAnimationFrame(() => card.classList.add('show'));
 }
 
-// Load socket.io from Railway server, fallback to CDN
+function showTypewriter(data) {
+  const card = document.getElementById('tpl-typewriter');
+  const displayed = document.getElementById('twDisplayed');
+  const speed = cfg.typewriter?.speed || 50;
+  document.getElementById('twQuestion').textContent =
+    `@${data.username}: "${data.message.substring(0,70)}${data.message.length>70?'…':''}"`;
+  displayed.textContent = '';
+  requestAnimationFrame(() => card.classList.add('show'));
+  let i = 0;
+  twTimer = setInterval(() => {
+    if (i < data.reply.length) { displayed.textContent += data.reply[i]; i++; }
+    else { clearInterval(twTimer); twTimer = null; }
+  }, speed);
+}
+
+function showMessenger(data) {
+  const card = document.getElementById('tpl-messenger');
+  document.getElementById('msgQName').textContent = `@${data.username}`;
+  document.getElementById('msgQText').textContent = data.message;
+  document.getElementById('msgRText').textContent = data.reply;
+  document.getElementById('msgTime').textContent =
+    new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+  requestAnimationFrame(() => card.classList.add('show'));
+}
+
+// ── Test mode (URL param) ─────────────────────────────────────
+setTimeout(() => {
+  if (new URLSearchParams(window.location.search).get('test') === '1') {
+    queueReply({ username: 'viewer123', message: 'which phone are you using?', reply: 'I use iPhone 17 Pro Max for streaming! 📱', replyType: 'quick' });
+    setTimeout(() => queueReply({ username: 'fan_xyz', message: 'where are you from?', reply: "I'm from Nepal! 🌍 Beautiful country!", replyType: 'ai' }), 4000);
+  }
+}, 1500);
+
+// ── Socket.IO ─────────────────────────────────────────────────
+function initSocket() {
+  const socket = io(SERVER_URL);
+  socket.on('connect', () => { if (SESSION_ID) socket.emit('join', SESSION_ID); });
+  // Live TikTok chat replies
+  socket.on('chat', data => { if (data.reply) queueReply(data); });
+  // ✅ Test chat from settings page
+  socket.on('test-chat', data => { if (data.reply) queueReply(data); });
+}
+
 (function loadSocketIO() {
-  const primary = document.createElement('script');
-  primary.src = SERVER_URL + '/socket.io/socket.io.js';
-  primary.onload = initSocket;
-  primary.onerror = function() {
-    const fallback = document.createElement('script');
-    fallback.src = 'https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js';
-    fallback.onload = initSocket;
-    document.head.appendChild(fallback);
+  const s = document.createElement('script');
+  s.src = SERVER_URL + '/socket.io/socket.io.js';
+  s.onload = initSocket;
+  s.onerror = () => {
+    const fb = document.createElement('script');
+    fb.src = 'https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js';
+    fb.onload = initSocket;
+    document.head.appendChild(fb);
   };
-  document.head.appendChild(primary);
+  document.head.appendChild(s);
 })();
 </script>
 </body>
