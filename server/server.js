@@ -30,6 +30,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'change_me_now';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY || '';
+const GOOGLE_TTS_KEY = process.env.GOOGLE_TTS_KEY || ''; // full service account JSON string
 const CURRENT_VERSION = '1.0.0';
 const PORT = process.env.PORT || 3000;
 
@@ -592,9 +593,15 @@ app.get('/api/tts/voices', async (req, res) => {
   }
   try {
     const r = await fetch('https://api.elevenlabs.io/v1/voices', {
-      headers: { 'xi-api-key': ELEVENLABS_API_KEY }
+      headers: {
+        'xi-api-key': ELEVENLABS_API_KEY.trim(), // ✅ trim whitespace from key
+        'Content-Type': 'application/json'
+      }
     });
-    if (!r.ok) throw new Error(`ElevenLabs returned ${r.status}`);
+    if (!r.ok) {
+      elVoicesCache = null; // ✅ clear cache on auth failure
+      throw new Error(`ElevenLabs returned ${r.status}`);
+    }
     const data = await r.json();
     elVoicesCache = data.voices.map(v => ({
       id: v.voice_id,
@@ -610,7 +617,7 @@ app.get('/api/tts/voices', async (req, res) => {
   }
 });
 
-// Text-to-speech via ElevenLabs — streams audio back as mp3
+// Text-to-speech via ElevenLabs — returns audio as mp3
 app.post('/api/tts/speak', async (req, res) => {
   if (!ELEVENLABS_API_KEY) {
     return res.status(503).json({ error: 'ElevenLabs API key not configured on server' });
@@ -619,13 +626,13 @@ app.post('/api/tts/speak', async (req, res) => {
   const { text, voiceId, stability, similarityBoost, sessionId } = req.body;
   if (!text || !voiceId) return res.status(400).json({ error: 'text and voiceId required' });
 
-  // Verify the session exists (basic auth — only your users can use TTS)
+  // Verify the session exists
   if (sessionId) {
     users = readDB('users');
     if (!users[sessionId]) return res.status(401).json({ error: 'Invalid session' });
   }
 
-  // Strip emojis server-side too
+  // Strip emojis server-side
   const clean = text
     .replace(/[\u{1F300}-\u{1FFFF}]/gu, '')
     .replace(/[\u2600-\u27BF]/g, '')
@@ -638,13 +645,13 @@ app.post('/api/tts/speak', async (req, res) => {
     const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
       method: 'POST',
       headers: {
-        'xi-api-key': ELEVENLABS_API_KEY,
+        'xi-api-key': ELEVENLABS_API_KEY.trim(), // ✅ trim whitespace
         'Content-Type': 'application/json',
         'Accept': 'audio/mpeg'
       },
       body: JSON.stringify({
         text: clean,
-        model_id: 'eleven_turbo_v2_5', // fastest + cheapest, still very natural
+        model_id: 'eleven_turbo_v2_5',
         voice_settings: {
           stability: stability ?? 0.5,
           similarity_boost: similarityBoost ?? 0.75,
@@ -660,14 +667,189 @@ app.post('/api/tts/speak', async (req, res) => {
       return res.status(r.status).json({ error: `ElevenLabs error: ${r.status}` });
     }
 
-    // Stream the audio directly back to the client
+    // ✅ FIX: node-fetch v3 uses Web Streams — must use arrayBuffer, NOT .pipe()
+    // .pipe() is a Node.js stream method and doesn't exist on Web ReadableStream
+    // Using .pipe() caused the server to crash with an unhandled exception
+    const audioBuffer = await r.arrayBuffer();
     res.set('Content-Type', 'audio/mpeg');
     res.set('Cache-Control', 'no-cache');
-    r.body.pipe(res);
+    res.set('Content-Length', audioBuffer.byteLength);
+    res.send(Buffer.from(audioBuffer));
 
   } catch (err) {
     console.error('ElevenLabs TTS fetch error:', err.message);
-    res.status(500).json({ error: err.message });
+    if (!res.headersSent) res.status(500).json({ error: err.message });
+  }
+});
+
+// ================================================================
+//  GOOGLE CLOUD TTS — Service account JSON stored in Railway var
+// ================================================================
+
+// Google OAuth2 token cache
+let googleTokenCache = null;
+let googleTokenExpiry = 0;
+
+async function getGoogleAccessToken() {
+  // Return cached token if still valid (with 60s buffer)
+  if (googleTokenCache && Date.now() < googleTokenExpiry - 60000) {
+    return googleTokenCache;
+  }
+
+  if (!GOOGLE_TTS_KEY) throw new Error('GOOGLE_TTS_KEY not set in Railway Variables');
+
+  let serviceAccount;
+  try {
+    serviceAccount = JSON.parse(GOOGLE_TTS_KEY);
+  } catch {
+    throw new Error('GOOGLE_TTS_KEY is not valid JSON — paste the full service account file');
+  }
+
+  // Build JWT for Google OAuth2
+  const now = Math.floor(Date.now() / 1000);
+  const header = { alg: 'RS256', typ: 'JWT' };
+  const payload = {
+    iss: serviceAccount.client_email,
+    scope: 'https://www.googleapis.com/auth/cloud-platform',
+    aud: 'https://oauth2.googleapis.com/token',
+    iat: now,
+    exp: now + 3600
+  };
+
+  // Encode JWT parts
+  const enc = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64url');
+  const signingInput = `${enc(header)}.${enc(payload)}`;
+
+  // Sign with RSA private key using Node.js crypto
+  const { createSign } = await import('crypto');
+  const sign = createSign('RSA-SHA256');
+  sign.update(signingInput);
+  const signature = sign.sign(serviceAccount.private_key, 'base64url');
+  const jwt = `${signingInput}.${signature}`;
+
+  // Exchange JWT for access token
+  const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}`
+  });
+
+  if (!tokenRes.ok) {
+    const err = await tokenRes.text();
+    throw new Error(`Google auth failed: ${err}`);
+  }
+
+  const tokenData = await tokenRes.json();
+  googleTokenCache = tokenData.access_token;
+  googleTokenExpiry = Date.now() + (tokenData.expires_in * 1000);
+  return googleTokenCache;
+}
+
+// Get Google TTS voices list
+let googleVoicesCache = null;
+let googleVoicesCacheTime = 0;
+
+app.get('/api/tts/google-voices', async (req, res) => {
+  if (!GOOGLE_TTS_KEY) {
+    return res.json({ available: false, error: 'GOOGLE_TTS_KEY not set in Railway Variables' });
+  }
+  if (googleVoicesCache && Date.now() - googleVoicesCacheTime < 3600000) {
+    return res.json({ available: true, voices: googleVoicesCache });
+  }
+  try {
+    const token = await getGoogleAccessToken();
+    const r = await fetch('https://texttospeech.googleapis.com/v1/voices', {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    if (!r.ok) throw new Error(`Google TTS returned ${r.status}`);
+    const data = await r.json();
+
+    // Filter to only high-quality voices — Neural2, WaveNet, Studio, Chirp
+    const quality = ['Neural2', 'WaveNet', 'Studio', 'Chirp', 'Journey'];
+    googleVoicesCache = data.voices
+      .filter(v => quality.some(q => v.name.includes(q)))
+      .map(v => ({
+        name: v.name,
+        languageCodes: v.languageCodes,
+        gender: v.ssmlGender,
+        type: quality.find(q => v.name.includes(q)) || 'Standard',
+        naturalSampleRateHertz: v.naturalSampleRateHertz
+      }))
+      .sort((a, b) => {
+        // Sort: Neural2 first, then WaveNet, then others
+        const order = ['Neural2', 'Studio', 'Journey', 'Chirp', 'WaveNet'];
+        return order.indexOf(a.type) - order.indexOf(b.type);
+      });
+
+    googleVoicesCacheTime = Date.now();
+    res.json({ available: true, voices: googleVoicesCache });
+  } catch (err) {
+    console.error('Google TTS voices error:', err.message);
+    res.json({ available: false, error: err.message });
+  }
+});
+
+// Google TTS synthesize
+app.post('/api/tts/google-speak', async (req, res) => {
+  if (!GOOGLE_TTS_KEY) {
+    return res.status(503).json({ error: 'GOOGLE_TTS_KEY not configured on server' });
+  }
+
+  const { text, voiceName, languageCode, speakingRate, pitch, sessionId } = req.body;
+  if (!text || !voiceName) return res.status(400).json({ error: 'text and voiceName required' });
+
+  if (sessionId) {
+    users = readDB('users');
+    if (!users[sessionId]) return res.status(401).json({ error: 'Invalid session' });
+  }
+
+  const clean = text
+    .replace(/[\u{1F300}-\u{1FFFF}]/gu, '')
+    .replace(/[\u2600-\u27BF]/g, '')
+    .replace(/\s+/g, ' ').trim();
+
+  if (!clean) return res.status(400).json({ error: 'No speakable text' });
+
+  try {
+    const token = await getGoogleAccessToken();
+    const r = await fetch('https://texttospeech.googleapis.com/v1/text:synthesize', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        input: { text: clean },
+        voice: {
+          languageCode: languageCode || voiceName.split('-').slice(0, 2).join('-'),
+          name: voiceName
+        },
+        audioConfig: {
+          audioEncoding: 'MP3',
+          speakingRate: speakingRate ?? 1.0,
+          pitch: pitch ?? 0,
+          effectsProfileId: ['headphone-class-device']
+        }
+      })
+    });
+
+    if (!r.ok) {
+      const errText = await r.text();
+      console.error('Google TTS error:', r.status, errText);
+      return res.status(r.status).json({ error: `Google TTS error: ${r.status}` });
+    }
+
+    const data = await r.json();
+    // Google returns base64-encoded MP3
+    const audioBuffer = Buffer.from(data.audioContent, 'base64');
+    res.set('Content-Type', 'audio/mpeg');
+    res.set('Cache-Control', 'no-cache');
+    res.set('Content-Length', audioBuffer.byteLength);
+    res.send(audioBuffer);
+
+  } catch (err) {
+    console.error('Google TTS fetch error:', err.message);
+    if (!res.headersSent) res.status(500).json({ error: err.message });
   }
 });
 
