@@ -122,7 +122,10 @@ function checkQuickReply(message, username, quickReplies, streamerInfo) {
   for (const qr of (quickReplies || [])) {
     for (const kw of qr.keywords) {
       if (lower.includes(kw.toLowerCase())) {
-        return fillTemplate(qr.reply, username, streamerInfo);
+        return {
+          reply: fillTemplate(qr.reply, username, streamerInfo),
+          speechReply: qr.speechReply ? fillTemplate(qr.speechReply, username, streamerInfo) : null
+        };
       }
     }
   }
@@ -204,22 +207,25 @@ async function handleChatMessage(data, sessionId) {
     message,
     timestamp: new Date().toLocaleTimeString(),
     reply: null,
+    speechReply: null,
     replyType: null
   };
 
-  const quickReply = checkQuickReply(message, username, cfg.quickReplies, cfg.streamerInfo);
-  if (quickReply && canReply(session)) {
-    msgObj.reply = quickReply;
+  const quickResult = checkQuickReply(message, username, cfg.quickReplies, cfg.streamerInfo);
+  if (quickResult && canReply(session)) {
+    msgObj.reply = quickResult.reply;
+    msgObj.speechReply = quickResult.speechReply; // ✅ separate speech text
     msgObj.replyType = 'quick';
     session.stats.quickReplies++;
     session.stats.replies++;
     session.replyTimestamps.push(Date.now());
-  } else if (!quickReply && canReply(session)) {
+  } else if (!quickResult && canReply(session)) {
     const shouldReply = cfg.bot?.onlyReplyToQuestions ? isQuestion(message) : true;
     if (shouldReply) {
       const aiReply = await generateAIReply(message, username, cfg.streamerInfo, cfg.bot?.replyLanguage);
       if (aiReply) {
         msgObj.reply = aiReply;
+        msgObj.speechReply = null; // AI replies use the reply text itself for speech
         msgObj.replyType = 'ai';
         session.stats.aiReplies++;
         session.stats.replies++;
@@ -542,12 +548,14 @@ app.post('/api/test-reply', async (req, res) => {
     kw.keywords.some(k => lower.includes(k.toLowerCase()))
   );
 
-  let reply, replyType;
+  let reply, speechReply, replyType;
   if (kwMatch) {
     reply = fillTemplate(kwMatch.reply, username || 'TestViewer', config.streamerInfo || {});
+    speechReply = kwMatch.speechReply ? fillTemplate(kwMatch.speechReply, username || 'TestViewer', config.streamerInfo || {}) : null;
     replyType = 'quick';
   } else {
     reply = await generateAIReply(message, username || 'TestViewer', config);
+    speechReply = null;
     replyType = 'ai';
   }
 
@@ -557,11 +565,12 @@ app.post('/api/test-reply', async (req, res) => {
       username: username || 'TestViewer',
       message,
       reply,
+      speechReply,
       replyType
     });
   }
 
-  res.json({ reply: reply || null, replyType });
+  res.json({ reply: reply || null, speechReply, replyType });
 });
 
 // Get overlay config for a session (used by overlay.html)
