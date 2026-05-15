@@ -142,6 +142,9 @@ function applyConfig(c) {
   const tw = c.typewriter || {};
   const msg = c.messenger || {};
 
+  // ✅ Apply TTS config
+  applyTTSConfig(c.tts);
+
   currentTemplate = o.template || 'tiktok';
 
   // Canvas size
@@ -223,6 +226,54 @@ function applyConfig(c) {
 loadConfig();
 setInterval(loadConfig, 15000);
 
+// ── TTS Engine ────────────────────────────────────────────────
+let ttsEnabled = false;
+let ttsVoiceName = '';
+let ttsRate = 1;
+let ttsPitch = 1;
+let ttsVolume = 1;
+let ttsSpeakAI = true;
+let ttsSayName = false;
+
+function applyTTSConfig(ttsCfg) {
+  if (!ttsCfg) return;
+  ttsEnabled = ttsCfg.enabled === true;
+  ttsVoiceName = ttsCfg.voice || '';
+  ttsRate = ttsCfg.rate ?? 1;
+  ttsPitch = ttsCfg.pitch ?? 1;
+  ttsVolume = ttsCfg.volume ?? 1;
+  ttsSpeakAI = ttsCfg.speakAI !== false;
+  ttsSayName = ttsCfg.sayName === true;
+}
+
+function speak(text) {
+  if (!ttsEnabled || !text) return;
+  if (!window.speechSynthesis) return;
+  window.speechSynthesis.cancel(); // stop any current speech
+  const utt = new SpeechSynthesisUtterance(text);
+  // Strip emojis for cleaner speech
+  utt.text = text.replace(/[\u{1F300}-\u{1FFFF}]/gu, '').replace(/[\u2600-\u27FF]/g, '').trim();
+  if (!utt.text) return;
+  const voices = window.speechSynthesis.getVoices();
+  if (ttsVoiceName) {
+    const v = voices.find(v => v.name === ttsVoiceName);
+    if (v) utt.voice = v;
+  }
+  utt.rate = ttsRate;
+  utt.pitch = ttsPitch;
+  utt.volume = ttsVolume;
+  window.speechSynthesis.speak(utt);
+}
+
+function speakReply(data) {
+  if (!ttsEnabled) return;
+  if (data.replyType === 'ai' && !ttsSpeakAI) return;
+  // Use speechReply if provided, otherwise fall back to reply text
+  const textToSpeak = data.speechReply || data.reply || '';
+  const prefix = (ttsSayName && data.username) ? `${data.username} asked. ` : '';
+  speak(prefix + textToSpeak);
+}
+
 // ── Reply queue ───────────────────────────────────────────────
 const replyQueue = [];
 let replyShowing = false;
@@ -272,6 +323,7 @@ function showTikTok(data) {
     pb.style.transform = 'scaleX(0)';
   }));
   requestAnimationFrame(() => card.classList.add('show'));
+  speakReply(data); // ✅ speak
 }
 
 function showTypewriter(data) {
@@ -282,6 +334,7 @@ function showTypewriter(data) {
     `@${data.username}: "${data.message.substring(0,70)}${data.message.length>70?'…':''}"`;
   displayed.textContent = '';
   requestAnimationFrame(() => card.classList.add('show'));
+  speakReply(data); // ✅ speak
   let i = 0;
   twTimer = setInterval(() => {
     if (i < data.reply.length) { displayed.textContent += data.reply[i]; i++; }
@@ -297,6 +350,7 @@ function showMessenger(data) {
   document.getElementById('msgTime').textContent =
     new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
   requestAnimationFrame(() => card.classList.add('show'));
+  speakReply(data); // ✅ speak
 }
 
 // ── Test mode (URL param) ─────────────────────────────────────
