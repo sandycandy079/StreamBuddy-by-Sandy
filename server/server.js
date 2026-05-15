@@ -194,6 +194,86 @@ function isQuestion(message) {
   return ['?','what','which','how','who','where','when','why','can you','do you','are you','is your'].some(w => lower.includes(w));
 }
 
+// ── Reply to TikTok chat using bot account ────────────────────
+// Uses the bot account's session cookie to post a comment
+// Rate limited to protect the bot account from being flagged
+const replyQueue = new Map(); // sessionId → queue of pending replies
+const replyInProgress = new Set();
+
+async function replyToTikTokChat(sessionId, message, replyText) {
+  const session = activeConnections.get(sessionId);
+  if (!session) return;
+
+  const botCfg = session.config?.botAccount;
+  if (!botCfg?.enabled || !botCfg?.sessionId || !botCfg?.ttTargetIdc) return;
+
+  // Queue to avoid spamming TikTok
+  if (!replyQueue.has(sessionId)) replyQueue.set(sessionId, []);
+  replyQueue.get(sessionId).push({ message, replyText });
+  processReplyQueue(sessionId);
+}
+
+async function processReplyQueue(sessionId) {
+  if (replyInProgress.has(sessionId)) return;
+  const queue = replyQueue.get(sessionId);
+  if (!queue?.length) return;
+
+  replyInProgress.add(sessionId);
+  const { message, replyText } = queue.shift();
+
+  try {
+    const session = activeConnections.get(sessionId);
+    const botCfg = session?.config?.botAccount;
+    if (!botCfg?.sessionId) return;
+
+    // Get the room ID from the active TikTok connection
+    const roomId = session?.tiktokConn?.roomId || session?.roomId;
+    if (!roomId) {
+      console.log(`[${sessionId.slice(0,8)}] ⚠️ Bot reply skipped — no room ID yet`);
+      return;
+    }
+
+    // TikTok live chat comment endpoint
+    const url = 'https://www.tiktok.com/api/live/comment/';
+    const params = new URLSearchParams({
+      aid: '1988',
+      app_name: 'tiktok_web',
+      device_platform: 'web_pc',
+    });
+
+    const res = await fetch(`${url}?${params}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Cookie': `sessionid=${botCfg.sessionId}; tt-target-idc=${botCfg.ttTargetIdc}`,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Referer': 'https://www.tiktok.com/',
+        'Origin': 'https://www.tiktok.com'
+      },
+      body: new URLSearchParams({
+        room_id: roomId,
+        content: replyText,
+        type: '1'
+      })
+    });
+
+    const data = await res.json();
+    if (data.status_code === 0) {
+      console.log(`[${sessionId.slice(0,8)}] 🤖 Bot replied in chat: "${replyText.substring(0, 40)}..."`);
+    } else {
+      console.log(`[${sessionId.slice(0,8)}] ⚠️ Bot reply failed: ${data.status_code} — ${data.status_msg || 'unknown'}`);
+    }
+  } catch (err) {
+    console.error(`[${sessionId.slice(0,8)}] ❌ Bot reply error:`, err.message);
+  } finally {
+    replyInProgress.delete(sessionId);
+    // Delay between replies to avoid TikTok flagging (2-4 seconds)
+    const session = activeConnections.get(sessionId);
+    const delay = (session?.config?.botAccount?.replyDelay || 3) * 1000;
+    setTimeout(() => processReplyQueue(sessionId), delay);
+  }
+}
+
 async function handleChatMessage(data, sessionId) {
   const session = activeConnections.get(sessionId);
   if (!session) return;
@@ -242,11 +322,22 @@ async function handleChatMessage(data, sessionId) {
   session.messages.unshift(msgObj);
   if (session.messages.length > 100) session.messages.pop();
 
-  io.to(sessionId).emit('chat', msgObj);
+  const features = cfg.features || {};
+
+  // Only emit to overlay if overlay feature is enabled (default: true)
+  if (features.overlayEnabled !== false) {
+    io.to(sessionId).emit('chat', msgObj);
+  }
   io.to(sessionId).emit('stats', session.stats);
 
   console.log(`[${sessionId.slice(0,8)}] 💬 @${username}: ${message}`);
-  if (msgObj.reply) console.log(`[${sessionId.slice(0,8)}]    🤖 (${msgObj.replyType}): ${msgObj.reply}`);
+  if (msgObj.reply) {
+    console.log(`[${sessionId.slice(0,8)}]    🤖 (${msgObj.replyType}): ${msgObj.reply}`);
+    // Post to TikTok chat only if chat reply feature is enabled
+    if (features.chatReplyEnabled === true) {
+      await replyToTikTokChat(sessionId, message, msgObj.reply);
+    }
+  }
 }
 
 async function connectToTikTok(sessionId, tiktokUsername, tiktokSessionId, ttTargetIdc) {
@@ -349,6 +440,7 @@ async function connectToTikTok(sessionId, tiktokUsername, tiktokSessionId, ttTar
         session.tiktokConn = conn;
         session.tiktokUsername = tiktokUsername;
         session.isConnected = true;
+        session.roomId = state.roomId; // ✅ store for bot replies
         io.to(sessionId).emit('status', { connected: true, username: tiktokUsername, roomId: state.roomId });
         attachListeners(conn);
         return { success: true };
@@ -510,7 +602,7 @@ app.get('/overlay/:sessionId', (req, res) => {
 
 // Save user settings (keywords, streamer info, overlay config)
 app.post('/api/settings', (req, res) => {
-  const { sessionId, streamerInfo, quickReplies, bot, overlayConfig } = req.body;
+  const { sessionId, streamerInfo, quickReplies, bot, overlayConfig, features } = req.body;
   users = readDB('users');
   licenses = readDB('licenses');
   if (!sessionId || !users[sessionId]) return res.json({ success: false, error: 'Invalid session' });
@@ -518,16 +610,19 @@ app.post('/api/settings', (req, res) => {
   const licKey = users[sessionId].licenseKey;
   if (!licenses[licKey]) return res.json({ success: false, error: 'License not found' });
 
-  // Save to license config
+  // Preserve botAccount config across settings saves
+  const existingBotAccount = licenses[licKey].config?.botAccount || {};
+
   licenses[licKey].config = {
     streamerInfo: streamerInfo || {},
     quickReplies: quickReplies || [],
     bot: bot || {},
-    overlayConfig: overlayConfig || {}
+    overlayConfig: overlayConfig || {},
+    features: features || { overlayEnabled: true, chatReplyEnabled: false, voiceEnabled: false },
+    botAccount: existingBotAccount // ✅ never overwrite bot credentials on settings save
   };
   writeDB('licenses', licenses);
 
-  // Update active session config
   const session = activeConnections.get(sessionId);
   if (session) session.config = licenses[licKey].config;
 
@@ -856,6 +951,155 @@ app.post('/api/tts/google-speak', async (req, res) => {
     console.error('Google TTS fetch error:', err.message);
     if (!res.headersSent) res.status(500).json({ error: err.message });
   }
+});
+
+// ================================================================
+//  TIKTOK BOT LOGIN — logs in with username/password, returns session
+//  Password never stored — only the resulting session cookie is saved
+// ================================================================
+app.post('/api/bot-login', async (req, res) => {
+  const { sessionId, botUsername, botPassword } = req.body;
+  if (!sessionId || !botUsername || !botPassword) {
+    return res.json({ success: false, error: 'Username and password required' });
+  }
+
+  users = readDB('users');
+  if (!users[sessionId]) return res.json({ success: false, error: 'Invalid session' });
+
+  console.log(`[${sessionId.slice(0,8)}] 🔐 Bot login attempt for @${botUsername}`);
+
+  try {
+    // Step 1: Get login page to grab CSRF token and cookies
+    const loginPageRes = await fetch('https://www.tiktok.com/login/phone-or-email/email', {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+      }
+    });
+
+    const initCookies = loginPageRes.headers.get('set-cookie') || '';
+    const msTokenMatch = initCookies.match(/msToken=([^;]+)/);
+    const msToken = msTokenMatch?.[1] || '';
+
+    // Step 2: Call TikTok login API
+    const loginRes = await fetch('https://www.tiktok.com/passport/web/account/password/login/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Cookie': `msToken=${msToken}`,
+        'Referer': 'https://www.tiktok.com/login/phone-or-email/email',
+        'Origin': 'https://www.tiktok.com'
+      },
+      body: new URLSearchParams({
+        username: botUsername,
+        password: botPassword,
+        mix_mode: '1',
+        aid: '1988'
+      })
+    });
+
+    const loginCookies = loginRes.headers.get('set-cookie') || '';
+    const loginData = await loginRes.json().catch(() => ({}));
+
+    // Extract session cookie from response
+    const sessionMatch = loginCookies.match(/sessionid=([^;]+)/);
+    const idcMatch = loginCookies.match(/tt-target-idc=([^;]+)/);
+
+    if (!sessionMatch?.[1]) {
+      // TikTok login often requires captcha or verification
+      // Check the error code
+      const errCode = loginData?.data?.error_code || loginData?.message || 'unknown';
+      console.log(`[${sessionId.slice(0,8)}] ❌ Bot login failed: ${errCode}`);
+
+      if (errCode === 'verify_required' || errCode === '1105' || loginRes.status === 403) {
+        return res.json({
+          success: false,
+          error: 'TikTok requires verification (captcha). Please use the Chrome profile method instead.',
+          captchaRequired: true
+        });
+      }
+      return res.json({ success: false, error: `Login failed (${errCode}). Check username/password.` });
+    }
+
+    const botSessionId = sessionMatch[1];
+    const botTtTargetIdc = idcMatch?.[1] || 'useast2a';
+
+    // Save bot credentials to license config (password NOT saved — only session)
+    licenses = readDB('licenses');
+    const licKey = users[sessionId].licenseKey;
+    if (!licenses[licKey].config) licenses[licKey].config = {};
+    licenses[licKey].config.botAccount = {
+      enabled: true,
+      username: botUsername,
+      sessionId: botSessionId,
+      ttTargetIdc: botTtTargetIdc,
+      replyDelay: 3,
+      loginMethod: 'password'
+    };
+    writeDB('licenses', licenses);
+
+    // Update active session
+    const session = activeConnections.get(sessionId);
+    if (session) session.config.botAccount = licenses[licKey].config.botAccount;
+
+    console.log(`[${sessionId.slice(0,8)}] ✅ Bot @${botUsername} logged in successfully`);
+    res.json({ success: true, username: botUsername });
+
+  } catch (err) {
+    console.error(`[${sessionId.slice(0,8)}] ❌ Bot login error:`, err.message);
+    res.json({ success: false, error: 'Login request failed: ' + err.message });
+  }
+});
+
+// Save bot account credentials for a session
+app.post('/api/bot-account', (req, res) => {
+  const { sessionId, botUsername, botSessionId, botTtTargetIdc, enabled, replyDelay } = req.body;
+  if (!sessionId) return res.json({ success: false, error: 'Session required' });
+
+  users = readDB('users');
+  licenses = readDB('licenses');
+  const user = users[sessionId];
+  if (!user) return res.json({ success: false, error: 'Invalid session' });
+
+  // Store bot account config in the license config
+  const lic = licenses[user.licenseKey];
+  if (!lic) return res.json({ success: false, error: 'License not found' });
+  if (!lic.config) lic.config = {};
+  lic.config.botAccount = {
+    enabled: enabled !== false,
+    username: botUsername || '',
+    sessionId: botSessionId || '',
+    ttTargetIdc: botTtTargetIdc || '',
+    replyDelay: replyDelay || 3
+  };
+  licenses[user.licenseKey] = lic;
+  writeDB('licenses', licenses);
+
+  // Also update active session config if connected
+  const session = activeConnections.get(sessionId);
+  if (session) session.config.botAccount = lic.config.botAccount;
+
+  console.log(`[${sessionId.slice(0,8)}] 🤖 Bot account updated: @${botUsername} (enabled: ${enabled})`);
+  res.json({ success: true });
+});
+
+// Get bot account status
+app.get('/api/bot-account/:sessionId', (req, res) => {
+  users = readDB('users');
+  licenses = readDB('licenses');
+  const user = users[req.params.sessionId];
+  if (!user) return res.json({ enabled: false });
+  const lic = licenses[user.licenseKey];
+  const botCfg = lic?.config?.botAccount || {};
+  // Never send the session cookie back to client
+  res.json({
+    enabled: botCfg.enabled || false,
+    username: botCfg.username || '',
+    hasSession: !!botCfg.sessionId,
+    replyDelay: botCfg.replyDelay || 3
+  });
 });
 
 // Get overlay config for a session (used by overlay.html)
