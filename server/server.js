@@ -120,10 +120,13 @@ function fillTemplate(template, username = '', streamerInfo = {}) {
 }
 
 function checkQuickReply(message, username, quickReplies, streamerInfo) {
-  const lower = message.toLowerCase();
   for (const qr of (quickReplies || [])) {
     for (const kw of qr.keywords) {
-      if (lower.includes(kw.toLowerCase())) {
+      // ✅ Whole-word match — "age" won't fire inside "rampage", "package", "erage" etc.
+      // Escapes special regex chars in keyword, then wraps with \b word boundaries
+      const escaped = kw.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(`\\b${escaped}\\b`, 'i');
+      if (regex.test(message)) {
         return {
           reply: fillTemplate(qr.reply, username, streamerInfo),
           speechReply: qr.speechReply ? fillTemplate(qr.speechReply, username, streamerInfo) : null
@@ -544,10 +547,12 @@ app.post('/api/test-reply', async (req, res) => {
   const lic = licenses[user.licenseKey];
   const config = lic?.config || {};
 
-  // Check keyword match
-  const lower = message.toLowerCase();
+  // Check keyword match — whole-word only to avoid "age" matching "rampage"
   const kwMatch = (config.quickReplies || []).find(kw =>
-    kw.keywords.some(k => lower.includes(k.toLowerCase()))
+    kw.keywords.some(k => {
+      const escaped = k.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return new RegExp(`\\b${escaped}\\b`, 'i').test(message);
+    })
   );
 
   let reply, speechReply, replyType;
