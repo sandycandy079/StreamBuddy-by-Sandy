@@ -29,7 +29,8 @@ app.use(express.static(path.join(__dirname, 'public')));
 // ================================================================
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'change_me_now';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
-const CURRENT_VERSION = '1.0.0';            // bump this when you update
+const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY || '';
+const CURRENT_VERSION = '1.0.0';
 const PORT = process.env.PORT || 3000;
 
 // ================================================================
@@ -571,6 +572,103 @@ app.post('/api/test-reply', async (req, res) => {
   }
 
   res.json({ reply: reply || null, speechReply, replyType });
+});
+
+// ================================================================
+//  ELEVENLABS TTS — API key never leaves the server
+// ================================================================
+
+// Get available ElevenLabs voices (cached 10 min)
+let elVoicesCache = null;
+let elVoicesCacheTime = 0;
+
+app.get('/api/tts/voices', async (req, res) => {
+  if (!ELEVENLABS_API_KEY) {
+    return res.json({ available: false, error: 'ElevenLabs API key not set in Railway Variables' });
+  }
+  // Return cache if fresh
+  if (elVoicesCache && Date.now() - elVoicesCacheTime < 600000) {
+    return res.json({ available: true, voices: elVoicesCache });
+  }
+  try {
+    const r = await fetch('https://api.elevenlabs.io/v1/voices', {
+      headers: { 'xi-api-key': ELEVENLABS_API_KEY }
+    });
+    if (!r.ok) throw new Error(`ElevenLabs returned ${r.status}`);
+    const data = await r.json();
+    elVoicesCache = data.voices.map(v => ({
+      id: v.voice_id,
+      name: v.name,
+      category: v.category || 'premade',
+      preview_url: v.preview_url || null
+    }));
+    elVoicesCacheTime = Date.now();
+    res.json({ available: true, voices: elVoicesCache });
+  } catch (err) {
+    console.error('ElevenLabs voices error:', err.message);
+    res.json({ available: false, error: err.message });
+  }
+});
+
+// Text-to-speech via ElevenLabs — streams audio back as mp3
+app.post('/api/tts/speak', async (req, res) => {
+  if (!ELEVENLABS_API_KEY) {
+    return res.status(503).json({ error: 'ElevenLabs API key not configured on server' });
+  }
+
+  const { text, voiceId, stability, similarityBoost, sessionId } = req.body;
+  if (!text || !voiceId) return res.status(400).json({ error: 'text and voiceId required' });
+
+  // Verify the session exists (basic auth — only your users can use TTS)
+  if (sessionId) {
+    users = readDB('users');
+    if (!users[sessionId]) return res.status(401).json({ error: 'Invalid session' });
+  }
+
+  // Strip emojis server-side too
+  const clean = text
+    .replace(/[\u{1F300}-\u{1FFFF}]/gu, '')
+    .replace(/[\u2600-\u27BF]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!clean) return res.status(400).json({ error: 'No speakable text after cleaning' });
+
+  try {
+    const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+      method: 'POST',
+      headers: {
+        'xi-api-key': ELEVENLABS_API_KEY,
+        'Content-Type': 'application/json',
+        'Accept': 'audio/mpeg'
+      },
+      body: JSON.stringify({
+        text: clean,
+        model_id: 'eleven_turbo_v2_5', // fastest + cheapest, still very natural
+        voice_settings: {
+          stability: stability ?? 0.5,
+          similarity_boost: similarityBoost ?? 0.75,
+          style: 0.3,
+          use_speaker_boost: true
+        }
+      })
+    });
+
+    if (!r.ok) {
+      const errText = await r.text();
+      console.error('ElevenLabs TTS error:', r.status, errText);
+      return res.status(r.status).json({ error: `ElevenLabs error: ${r.status}` });
+    }
+
+    // Stream the audio directly back to the client
+    res.set('Content-Type', 'audio/mpeg');
+    res.set('Cache-Control', 'no-cache');
+    r.body.pipe(res);
+
+  } catch (err) {
+    console.error('ElevenLabs TTS fetch error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Get overlay config for a session (used by overlay.html)
