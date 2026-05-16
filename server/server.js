@@ -227,91 +227,52 @@ async function processReplyQueue(sessionId) {
   try {
     const session = activeConnections.get(sessionId);
     const botCfg = session?.config?.botAccount;
-    if (!botCfg?.sessionId) return;
 
-    // Get room ID — stored when TikTok live connects
-    const roomId = session?.roomId;
-    if (!roomId) {
-      console.log(`[${sessionId.slice(0,8)}] ⚠️ Bot reply skipped — not connected to live yet`);
+    if (!botCfg?.sessionId) {
+      console.log(`[${sessionId.slice(0,8)}] ⚠️ Bot skipped — no sessionId in botCfg`);
       return;
     }
 
-    console.log(`[${sessionId.slice(0,8)}] 🤖 Bot sending: "${replyText.substring(0, 50)}"`);
-
-    // Step 1: Get msToken and ttwid by hitting TikTok homepage with bot session
-    let msToken = '';
-    let ttwid = '';
-    try {
-      const homeRes = await fetch('https://www.tiktok.com/', {
-        headers: {
-          'Cookie': `sessionid=${botCfg.sessionId}; tt-target-idc=${botCfg.ttTargetIdc || 'useast2a'}`,
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.5'
-        }
-      });
-      const setCookies = homeRes.headers.get('set-cookie') || '';
-      const msTokenMatch = setCookies.match(/msToken=([^;]+)/);
-      const ttwidMatch = setCookies.match(/ttwid=([^;]+)/);
-      msToken = msTokenMatch?.[1] || '';
-      ttwid = ttwidMatch?.[1] || '';
-    } catch (e) {
-      console.log(`[${sessionId.slice(0,8)}] ⚠️ Could not get msToken: ${e.message}`);
+    const roomId = session?.roomId;
+    if (!roomId) {
+      console.log(`[${sessionId.slice(0,8)}] ⚠️ Bot skipped — no roomId (not live yet?)`);
+      return;
     }
 
-    // Build full cookie string
-    const cookieStr = [
-      `sessionid=${botCfg.sessionId}`,
-      botCfg.ttTargetIdc ? `tt-target-idc=${botCfg.ttTargetIdc}` : '',
-      msToken ? `msToken=${msToken}` : '',
-      ttwid ? `ttwid=${ttwid}` : ''
-    ].filter(Boolean).join('; ');
+    const cookieStr = `sessionid=${botCfg.sessionId}; tt-target-idc=${botCfg.ttTargetIdc || 'useast2a'}`;
+    console.log(`[${sessionId.slice(0,8)}] 🤖 Bot posting comment to room ${roomId}...`);
 
-    // Step 2: Post comment to TikTok live
-    // Correct endpoint for TikTok LIVE comments (webcast)
-    const commentUrl = `https://webcast.tiktok.com/webcast/room/chat/`;
-    const queryParams = new URLSearchParams({
-      aid: '1988',
-      app_name: 'tiktok_web',
-      device_platform: 'web_pc',
-      browser_language: 'en-US',
-      browser_platform: 'Win32',
-      browser_name: 'Mozilla',
-      browser_version: '5.0 (Windows NT 10.0; Win64; x64)',
-      room_id: roomId
-    });
-
-    const commentRes = await fetch(`${commentUrl}?${queryParams}`, {
+    const res = await fetch('https://webcast.tiktok.com/webcast/room/chat/', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
         'Cookie': cookieStr,
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Referer': `https://www.tiktok.com/@${session.tiktokUsername}/live`,
+        'Referer': `https://www.tiktok.com/@${session?.tiktokUsername}/live`,
         'Origin': 'https://www.tiktok.com',
-        'Accept': 'application/json, text/plain, */*',
-        'Accept-Language': 'en-US,en;q=0.5'
+        'Accept': 'application/json, text/plain, */*'
       },
       body: new URLSearchParams({
+        room_id: roomId,
         content: replyText,
         type: '1',
-        room_id: roomId
+        aid: '1988',
+        app_name: 'tiktok_web',
+        device_platform: 'web_pc'
       })
     });
 
-    const rawText = await commentRes.text();
+    const rawText = await res.text();
+    console.log(`[${sessionId.slice(0,8)}] 📡 TikTok reply ${res.status}: ${rawText.substring(0, 300)}`);
+
     let data = {};
     try { data = JSON.parse(rawText); } catch {}
 
-    if (data.status_code === 0 || commentRes.status === 200) {
-      console.log(`[${sessionId.slice(0,8)}] ✅ Bot replied: "${replyText.substring(0, 40)}"`);
+    if (data.status_code === 0) {
+      console.log(`[${sessionId.slice(0,8)}] ✅ Bot comment posted!`);
     } else {
-      console.log(`[${sessionId.slice(0,8)}] ⚠️ Bot reply status: ${data.status_code} — ${data.message || rawText.substring(0, 100)}`);
-
-      // If auth failed, try alternate endpoint
-      if (data.status_code === 4003110 || data.status_code === 4003111 || commentRes.status === 401) {
-        await tryAlternateCommentEndpoint(sessionId, roomId, replyText, cookieStr, session);
-      }
+      console.log(`[${sessionId.slice(0,8)}] ⚠️ status_code=${data.status_code} trying alternate...`);
+      await tryAlternateCommentEndpoint(sessionId, roomId, replyText, cookieStr, session);
     }
 
   } catch (err) {
