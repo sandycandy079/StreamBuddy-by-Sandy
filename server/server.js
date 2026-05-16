@@ -685,6 +685,23 @@ app.get('/overlay/:sessionId', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'overlay.html'));
 });
 
+// Get user settings — called by settings page on load
+app.get('/api/settings/:sessionId', (req, res) => {
+  users = readDB('users');
+  licenses = readDB('licenses');
+  const user = users[req.params.sessionId];
+  if (!user) return res.json({});
+  const lic = licenses[user.licenseKey];
+  const config = lic?.config || {};
+  res.json({
+    streamerInfo: config.streamerInfo || {},
+    quickReplies: config.quickReplies || [],
+    bot: config.bot || {},
+    overlayConfig: config.overlayConfig || {},
+    features: config.features || { overlayEnabled: true, chatReplyEnabled: false, voiceEnabled: false }
+  });
+});
+
 // Update only feature flags — doesn't touch other config
 app.post('/api/features', (req, res) => {
   const { sessionId, features } = req.body;
