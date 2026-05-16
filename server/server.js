@@ -403,7 +403,10 @@ async function handleChatMessage(data, sessionId) {
   session.messages.unshift(msgObj);
   if (session.messages.length > 100) session.messages.pop();
 
-  const features = cfg.features || {};
+  // ✅ Read config fresh every time — settings may have changed since connection started
+  const freshCfg = session.config || {};
+  const features = freshCfg.features || {};
+  const botAccount = freshCfg.botAccount || {};
 
   // Only emit to overlay if overlay feature is enabled (default: true)
   if (features.overlayEnabled !== false) {
@@ -414,10 +417,9 @@ async function handleChatMessage(data, sessionId) {
   console.log(`[${sessionId.slice(0,8)}] 💬 @${username}: ${message}`);
   if (msgObj.reply) {
     console.log(`[${sessionId.slice(0,8)}]    🤖 (${msgObj.replyType}): ${msgObj.reply}`);
-    // Post to TikTok chat only if chat reply feature is enabled
-    if (features.chatReplyEnabled === true) {
-      const botCfg = cfg.botAccount;
-      console.log(`[${sessionId.slice(0,8)}] 🔍 Bot check — enabled:${botCfg?.enabled} hasSession:${!!botCfg?.sessionId} roomId:${session?.roomId}`);
+    // Post to TikTok chat if chat reply feature is enabled AND bot is configured
+    console.log(`[${sessionId.slice(0,8)}] 🔍 Chat reply: enabled=${features.chatReplyEnabled} bot.enabled=${botAccount.enabled} hasSession=${!!botAccount.sessionId} roomId=${session?.roomId}`);
+    if (features.chatReplyEnabled === true && botAccount.enabled && botAccount.sessionId) {
       await replyToTikTokChat(sessionId, message, msgObj.reply);
     }
   }
@@ -681,6 +683,29 @@ app.get('/api/stats/:sessionId', (req, res) => {
 // Overlay page (per user)
 app.get('/overlay/:sessionId', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'overlay.html'));
+});
+
+// Update only feature flags — doesn't touch other config
+app.post('/api/features', (req, res) => {
+  const { sessionId, features } = req.body;
+  if (!sessionId || !features) return res.json({ success: false });
+  users = readDB('users');
+  licenses = readDB('licenses');
+  const user = users[sessionId];
+  if (!user) return res.json({ success: false });
+  const licKey = user.licenseKey;
+  if (!licenses[licKey]) return res.json({ success: false });
+  if (!licenses[licKey].config) licenses[licKey].config = {};
+  licenses[licKey].config.features = features;
+  writeDB('licenses', licenses);
+  // Update active session immediately
+  const session = activeConnections.get(sessionId);
+  if (session) {
+    if (!session.config) session.config = {};
+    session.config.features = features;
+    console.log(`[${sessionId.slice(0,8)}] 🔧 Features updated — overlay:${features.overlayEnabled} chatReply:${features.chatReplyEnabled} voice:${features.voiceEnabled}`);
+  }
+  res.json({ success: true });
 });
 
 // Save user settings (keywords, streamer info, overlay config)
