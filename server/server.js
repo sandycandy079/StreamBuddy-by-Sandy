@@ -1,1174 +1,1262 @@
 // ================================================================
-//  StreamBuddy By Sandy — Settings Script (v2)
+// StreamBuddy By Sandy — SaaS Server
+//  Multi-user | License Keys | Auto-update | Gemini AI
 // ================================================================
 
-const SERVER_URL = 'https://streambuddy-by-sandy-production.up.railway.app';
+import express from 'express';
+import { createServer } from 'http';
+import { Server } from 'socket.io';
+import { WebcastPushConnection } from 'tiktok-live-connector';
+import fetch from 'node-fetch';
+import { v4 as uuidv4 } from 'uuid';
+import cors from 'cors';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import fs from 'fs';
 
-let settings = {
-  keywords: [],
-  bot: { onlyReplyToQuestions: false, replyLanguage: 'English', replyCooldownSeconds: 3, maxRepliesPerMinute: 10 },
-  streamerInfo: { name: '', age: '', location: '', phone: '', setup: '', streamingFor: '', about: '' },
-  overlay: { layout: 'bottom-left', accentColor: '#fe2c55', bgOpacity: 0.82, blurStrength: 12, borderRadius: 16, cardWidth: 580, orientation: 'vertical', template: 'tiktok' },
-  fonts: { fontFamily: "'Segoe UI', Arial, sans-serif", fontSize: 22, fontWeight: 700, textColor: '#ffffff', letterSpacing: -0.2, lineHeight: 1.4, questionFontSize: 13 },
-  animation: { type: 'slide-up', displayDuration: 7, animSpeed: 0.5, showProgress: true, showGlow: true, showBlur: true, showBadgeDot: true },
-  typewriter: { color: '#ffffff', fontSize: 32, glow: 12, speed: 50, showCursor: true, showQuestion: true },
-  messenger: { bubbleColor: '#0b84ff', fontSize: 20, bgOpacity: 0.85, readReceipts: true, showTimestamp: true },
-  tts: { enabled: false, engine: 'browser', voice: '', rate: 1, pitch: 1, volume: 1, speakAI: true, sayName: false,
-         elVoiceId: '', elStability: 0.5, elSimilarity: 0.75, elVolume: 1,
-         googleVoice: '', googleVoiceType: 'Neural2', googleRate: 1, googlePitch: 0, googleVolume: 1 },
-  features: { overlayEnabled: true, chatReplyEnabled: false, voiceEnabled: false }
-};
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const app = express();
+const httpServer = createServer(app);
+const io = new Server(httpServer, { cors: { origin: '*' } });
 
-let editingKeywordIndex = -1;
-let currentPreviewOrient = 'vertical';
+app.use(cors());
+app.use(express.json());
+app.use(express.static(path.join(__dirname, 'public')));
 
-// ── Init ──────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', async () => {
+// ================================================================
+//  CONFIG — All secrets come from environment variables
+//  Set these in Railway → your service → Variables tab
+// ================================================================
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'change_me_now';
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
+const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY || '';
+const GOOGLE_TTS_KEY = process.env.GOOGLE_TTS_KEY || ''; // full service account JSON string
+const CURRENT_VERSION = '1.0.0';
+const PORT = process.env.PORT || 3000;
 
-  // Load from local cache first
-  const stored = await chrome.storage.local.get(['overlaySettings', 'serverConfig', 'sessionId']);
-  if (stored.overlaySettings) settings = deepMerge(settings, stored.overlaySettings);
-  if (stored.serverConfig) {
-    if (stored.serverConfig.quickReplies) settings.keywords = stored.serverConfig.quickReplies;
-    if (stored.serverConfig.streamerInfo) settings.streamerInfo = { ...settings.streamerInfo, ...stored.serverConfig.streamerInfo };
-    if (stored.serverConfig.bot) settings.bot = { ...settings.bot, ...stored.serverConfig.bot };
-  }
+// ================================================================
+//  DATABASE (flat JSON files — persistent across Railway deploys!)
+//
+//  ⚠️  Railway ephemeral filesystem fix:
+//  Files under __dirname are wiped on every deploy.
+//  Store data in /data which is a Railway Persistent Volume mount.
+//  Falls back to ./db for local development.
+// ================================================================
+const VOLUME_PATH = '/data';
+const DB_PATH = fs.existsSync(VOLUME_PATH) ? VOLUME_PATH : path.join(__dirname, 'db');
+if (!fs.existsSync(DB_PATH)) fs.mkdirSync(DB_PATH, { recursive: true });
+console.log(`[DB] Storage path: ${DB_PATH}`);
 
-  // Fetch latest from server (source of truth)
-  if (stored.sessionId) {
-    try {
-      const res = await fetch(`${SERVER_URL}/api/settings/${stored.sessionId}`);
-      if (res.ok) {
-        const d = await res.json();
-        if (d.quickReplies) settings.keywords = d.quickReplies;
-        if (d.streamerInfo) settings.streamerInfo = { ...settings.streamerInfo, ...d.streamerInfo };
-        if (d.bot) settings.bot = { ...settings.bot, ...d.bot };
-        // ✅ Load features from server (chatReplyEnabled, overlayEnabled etc)
-        if (d.features) settings.features = { ...settings.features, ...d.features };
-        if (d.overlayConfig) {
-          if (d.overlayConfig.overlay) settings.overlay = { ...settings.overlay, ...d.overlayConfig.overlay };
-          if (d.overlayConfig.fonts) settings.fonts = { ...settings.fonts, ...d.overlayConfig.fonts };
-          if (d.overlayConfig.animation) settings.animation = { ...settings.animation, ...d.overlayConfig.animation };
-          if (d.overlayConfig.typewriter) settings.typewriter = { ...settings.typewriter, ...d.overlayConfig.typewriter };
-          if (d.overlayConfig.messenger) settings.messenger = { ...settings.messenger, ...d.overlayConfig.messenger };
-          if (d.overlayConfig.tts) settings.tts = { ...settings.tts, ...d.overlayConfig.tts };
-        }
-        await chrome.storage.local.set({ overlaySettings: settings });
-      }
-    } catch {}
-  }
-
-  // ── Wire tabs ──
-  document.querySelectorAll('.tab').forEach(tab => {
-    tab.addEventListener('click', () => switchTab(tab.dataset.tab));
-  });
-
-  document.getElementById('backBtn').addEventListener('click', () => window.close());
-  document.getElementById('saveBtn').addEventListener('click', saveAll);
-  document.getElementById('addKeywordBtn').addEventListener('click', () => openKwModal(-1));
-  document.getElementById('kwCancel').addEventListener('click', closeKwModal);
-  document.getElementById('kwSave').addEventListener('click', saveKeyword);
-
-  // ── Feature toggle bar ──
-  document.getElementById('ft-overlay').addEventListener('click', () => {
-    settings.features.overlayEnabled = !settings.features.overlayEnabled;
-    updateFeatureBar();
-    saveFeatures();
-  });
-  document.getElementById('ft-chatreply').addEventListener('click', () => {
-    settings.features.chatReplyEnabled = !settings.features.chatReplyEnabled;
-    updateFeatureBar();
-    saveFeatures();
-  });
-  document.getElementById('ft-voice').addEventListener('click', () => {
-    settings.features.voiceEnabled = !settings.features.voiceEnabled;
-    settings.tts.enabled = settings.features.voiceEnabled;
-    document.getElementById('ttsEnabled').checked = settings.features.voiceEnabled;
-    document.getElementById('ttsOptions').style.display = settings.features.voiceEnabled ? '' : 'none';
-    document.getElementById('kwSpeechField').style.display = settings.features.voiceEnabled ? '' : 'none';
-    updateFeatureBar();
-    saveFeatures();
-  });
-
-  // ── Template cards ──
-  document.querySelectorAll('.template-card').forEach(card => {
-    card.addEventListener('click', () => {
-      document.querySelectorAll('.template-card').forEach(c => c.classList.remove('active'));
-      card.classList.add('active');
-      settings.overlay.template = card.dataset.template;
-      showTemplateOptions(card.dataset.template);
-      updatePreview();
-    });
-  });
-
-  // ── Layout cards ──
-  document.querySelectorAll('.layout-card').forEach(card => {
-    card.addEventListener('click', () => {
-      document.querySelectorAll('.layout-card').forEach(c => c.classList.remove('active'));
-      card.classList.add('active');
-      settings.overlay.layout = card.dataset.layout;
-      updatePreview();
-    });
-  });
-
-  // ── Orientation cards (left panel) ──
-  document.querySelectorAll('.orient-card').forEach(card => {
-    card.addEventListener('click', () => {
-      document.querySelectorAll('.orient-card').forEach(c => c.classList.remove('active'));
-      card.classList.add('active');
-      settings.overlay.orientation = card.dataset.orient;
-      setPreviewOrient(card.dataset.orient);
-    });
-  });
-
-  // ── Preview orientation buttons (top of right panel) ──
-  document.getElementById('pvOrientV').addEventListener('click', () => setPreviewOrient('vertical'));
-  document.getElementById('pvOrientL').addEventListener('click', () => setPreviewOrient('landscape'));
-
-  // ── Accent color swatches (TikTok) ──
-  document.querySelectorAll('#colorRow .color-swatch').forEach(sw => {
-    sw.addEventListener('click', () => {
-      document.querySelectorAll('#colorRow .color-swatch').forEach(s => s.classList.remove('active'));
-      sw.classList.add('active');
-      settings.overlay.accentColor = sw.dataset.color;
-      document.getElementById('customColor').value = sw.dataset.color;
-      updatePreview();
-    });
-  });
-  document.getElementById('customColor').addEventListener('input', e => {
-    document.querySelectorAll('#colorRow .color-swatch').forEach(s => s.classList.remove('active'));
-    settings.overlay.accentColor = e.target.value;
-    updatePreview();
-  });
-
-  // ── Text color swatches ──
-  document.querySelectorAll('[data-textcolor]').forEach(sw => {
-    sw.addEventListener('click', () => {
-      document.querySelectorAll('[data-textcolor]').forEach(s => s.classList.remove('active'));
-      sw.classList.add('active');
-      settings.fonts.textColor = sw.dataset.textcolor;
-      document.getElementById('customTextColor').value = sw.dataset.textcolor;
-      updatePreview();
-    });
-  });
-  document.getElementById('customTextColor').addEventListener('input', e => {
-    document.querySelectorAll('[data-textcolor]').forEach(s => s.classList.remove('active'));
-    settings.fonts.textColor = e.target.value;
-    updatePreview();
-  });
-
-  // ── Typewriter color swatches ──
-  document.querySelectorAll('[data-twcolor]').forEach(sw => {
-    sw.addEventListener('click', () => {
-      document.querySelectorAll('[data-twcolor]').forEach(s => s.classList.remove('active'));
-      sw.classList.add('active');
-      settings.typewriter.color = sw.dataset.twcolor;
-      document.getElementById('twColor').value = sw.dataset.twcolor;
-      updatePreview();
-    });
-  });
-  document.getElementById('twColor').addEventListener('input', e => {
-    document.querySelectorAll('[data-twcolor]').forEach(s => s.classList.remove('active'));
-    settings.typewriter.color = e.target.value;
-    updatePreview();
-  });
-
-  // ── Messenger color swatches ──
-  document.querySelectorAll('[data-msgcolor]').forEach(sw => {
-    sw.addEventListener('click', () => {
-      document.querySelectorAll('[data-msgcolor]').forEach(s => s.classList.remove('active'));
-      sw.classList.add('active');
-      settings.messenger.bubbleColor = sw.dataset.msgcolor;
-      document.getElementById('msgColor').value = sw.dataset.msgcolor;
-      updatePreview();
-    });
-  });
-  document.getElementById('msgColor').addEventListener('input', e => {
-    document.querySelectorAll('[data-msgcolor]').forEach(s => s.classList.remove('active'));
-    settings.messenger.bubbleColor = e.target.value;
-    updatePreview();
-  });
-
-  // ── Animation cards ──
-  document.querySelectorAll('.anim-card').forEach(card => {
-    card.addEventListener('click', () => {
-      document.querySelectorAll('.anim-card').forEach(c => c.classList.remove('active'));
-      card.classList.add('active');
-      settings.animation.type = card.dataset.anim;
-    });
-  });
-
-  // ── Range sliders ──
-  setupRange('bgOpacity', 'bgOpacityVal', v => Math.round(v * 100) + '%', v => { settings.overlay.bgOpacity = parseFloat(v); updatePreview(); });
-  setupRange('blurStrength', 'blurVal', v => v + 'px', v => { settings.overlay.blurStrength = parseInt(v); updatePreview(); });
-  setupRange('borderRadius', 'radiusVal', v => v + 'px', v => { settings.overlay.borderRadius = parseInt(v); updatePreview(); });
-  setupRange('cardWidth', 'widthVal', v => v, v => { settings.overlay.cardWidth = parseInt(v); updatePreview(); });
-  setupRange('fontSize', 'fontSizeVal', v => v + 'px', v => { settings.fonts.fontSize = parseInt(v); updatePreview(); });
-  setupRange('letterSpacing', 'letterSpacingVal', v => v, v => { settings.fonts.letterSpacing = parseFloat(v); updatePreview(); });
-  setupRange('lineHeight', 'lineHeightVal', v => v, v => { settings.fonts.lineHeight = parseFloat(v); updatePreview(); });
-  setupRange('questionFontSize', 'questionFontSizeVal', v => v + 'px', v => settings.fonts.questionFontSize = parseInt(v));
-  setupRange('displayDuration', 'durationVal', v => v + 's', v => settings.animation.displayDuration = parseInt(v));
-  setupRange('animSpeed', 'animSpeedVal', v => v + 's', v => settings.animation.animSpeed = parseFloat(v));
-  setupRange('twFontSize', 'twFontSizeVal', v => v + 'px', v => { settings.typewriter.fontSize = parseInt(v); updatePreview(); });
-  setupRange('twGlow', 'twGlowVal', v => v + 'px', v => { settings.typewriter.glow = parseInt(v); updatePreview(); });
-  setupRange('twSpeed', 'twSpeedVal', v => v + 'ms', v => { settings.typewriter.speed = parseInt(v); });
-  setupRange('msgFontSize', 'msgFontSizeVal', v => v + 'px', v => { settings.messenger.fontSize = parseInt(v); updatePreview(); });
-  setupRange('msgBgOpacity', 'msgBgOpacityVal', v => Math.round(v * 100) + '%', v => { settings.messenger.bgOpacity = parseFloat(v); updatePreview(); });
-
-  // ── Select + checkbox ──
-  document.getElementById('fontFamily').addEventListener('change', e => { settings.fonts.fontFamily = e.target.value; updatePreview(); });
-  document.getElementById('fontWeight').addEventListener('change', e => { settings.fonts.fontWeight = parseInt(e.target.value); updatePreview(); });
-  document.getElementById('onlyQuestions').addEventListener('change', e => settings.bot.onlyReplyToQuestions = e.target.checked);
-  document.getElementById('replyLanguage').addEventListener('change', e => settings.bot.replyLanguage = e.target.value);
-  document.getElementById('cooldown').addEventListener('change', e => settings.bot.replyCooldownSeconds = parseInt(e.target.value));
-  document.getElementById('maxReplies').addEventListener('change', e => settings.bot.maxRepliesPerMinute = parseInt(e.target.value));
-  document.getElementById('showProgress').addEventListener('change', e => { settings.animation.showProgress = e.target.checked; updatePreview(); });
-  document.getElementById('showGlow').addEventListener('change', e => { settings.animation.showGlow = e.target.checked; updatePreview(); });
-  document.getElementById('showBlur').addEventListener('change', e => { settings.animation.showBlur = e.target.checked; updatePreview(); });
-  document.getElementById('showBadgeDot').addEventListener('change', e => settings.animation.showBadgeDot = e.target.checked);
-  document.getElementById('twCursor').addEventListener('change', e => { settings.typewriter.showCursor = e.target.checked; updatePreview(); });
-  document.getElementById('twShowQuestion').addEventListener('change', e => { settings.typewriter.showQuestion = e.target.checked; updatePreview(); });
-  document.getElementById('msgReadReceipts').addEventListener('change', e => { settings.messenger.readReceipts = e.target.checked; updatePreview(); });
-  document.getElementById('msgTimestamp').addEventListener('change', e => { settings.messenger.showTimestamp = e.target.checked; updatePreview(); });
-
-  // ── TTS controls ──
-  document.getElementById('ttsEnabled').addEventListener('change', e => {
-    settings.tts.enabled = e.target.checked;
-    document.getElementById('ttsOptions').style.display = e.target.checked ? '' : 'none';
-    document.getElementById('kwSpeechField').style.display = e.target.checked ? '' : 'none';
-    if (e.target.checked && settings.tts.engine === 'elevenlabs') loadElevenLabsVoices();
-  });
-
-  // Engine cards
-  document.querySelectorAll('.tts-engine-card').forEach(card => {
-    card.addEventListener('click', () => {
-      document.querySelectorAll('.tts-engine-card').forEach(c => c.classList.remove('active'));
-      card.classList.add('active');
-      settings.tts.engine = card.dataset.engine;
-      document.getElementById('browserVoiceOpts').style.display = card.dataset.engine === 'browser' ? '' : 'none';
-      document.getElementById('elevenlabsVoiceOpts').style.display = card.dataset.engine === 'elevenlabs' ? '' : 'none';
-      document.getElementById('googleVoiceOpts').style.display = card.dataset.engine === 'google' ? '' : 'none';
-      if (card.dataset.engine === 'elevenlabs') loadElevenLabsVoices();
-      if (card.dataset.engine === 'google') loadGoogleVoices();
-    });
-  });
-
-  document.getElementById('ttsSpeakAI').addEventListener('change', e => settings.tts.speakAI = e.target.checked);
-  document.getElementById('ttsSayName').addEventListener('change', e => settings.tts.sayName = e.target.checked);
-
-  // Browser voice controls
-  setupRange('ttsRate', 'ttsRateVal', v => parseFloat(v).toFixed(1) + 'x', v => settings.tts.rate = parseFloat(v));
-  setupRange('ttsPitch', 'ttsPitchVal', v => parseFloat(v).toFixed(1), v => settings.tts.pitch = parseFloat(v));
-  setupRange('ttsVolume', 'ttsVolumeVal', v => Math.round(v * 100) + '%', v => settings.tts.volume = parseFloat(v));
-
-  // ElevenLabs controls
-  setupRange('elStability', 'elStabilityVal', v => parseFloat(v).toFixed(2), v => settings.tts.elStability = parseFloat(v));
-  setupRange('elSimilarity', 'elSimilarityVal', v => parseFloat(v).toFixed(2), v => settings.tts.elSimilarity = parseFloat(v));
-  setupRange('elVolume', 'elVolumeVal', v => Math.round(v * 100) + '%', v => settings.tts.elVolume = parseFloat(v));
-  document.getElementById('elVoice').addEventListener('change', e => settings.tts.elVoiceId = e.target.value);
-
-  // Google TTS controls
-  setupRange('googleRate', 'googleRateVal', v => parseFloat(v).toFixed(2) + 'x', v => settings.tts.googleRate = parseFloat(v));
-  setupRange('googlePitch', 'googlePitchVal', v => parseFloat(v).toFixed(1), v => settings.tts.googlePitch = parseFloat(v));
-  setupRange('googleVolume', 'googleVolumeVal', v => Math.round(v * 100) + '%', v => settings.tts.googleVolume = parseFloat(v));
-  document.getElementById('googleVoice').addEventListener('change', e => settings.tts.googleVoice = e.target.value);
-  document.getElementById('googleVoiceType').addEventListener('change', e => {
-    settings.tts.googleVoiceType = e.target.value;
-    filterGoogleVoices(e.target.value);
-  });
-
-  // Browser voice list
-  // Chrome extensions often return empty on first getVoices() call
-  // and onvoiceschanged doesn't always fire — use polling as fallback
-  function populateVoices() {
-    const voices = window.speechSynthesis.getVoices();
-    if (!voices.length) return false; // not ready yet
-    const sel = document.getElementById('ttsVoice');
-    // Group by language for easier browsing
-    const grouped = {};
-    voices.forEach(v => {
-      const lang = v.lang.split('-')[0].toUpperCase();
-      if (!grouped[lang]) grouped[lang] = [];
-      grouped[lang].push(v);
-    });
-    sel.innerHTML = Object.entries(grouped)
-      .sort(([a], [b]) => a === 'EN' ? -1 : b === 'EN' ? 1 : a.localeCompare(b))
-      .map(([lang, vs]) =>
-        `<optgroup label="${lang}">` +
-        vs.map(v => `<option value="${v.name}" ${v.name === settings.tts.voice ? 'selected' : ''}>${v.name}</option>`).join('') +
-        `</optgroup>`
-      ).join('');
-    if (!settings.tts.voice && voices.length) {
-      // Default to first English voice
-      const eng = voices.find(v => v.lang.startsWith('en')) || voices[0];
-      settings.tts.voice = eng.name;
-      sel.value = eng.name;
-    } else if (settings.tts.voice) {
-      sel.value = settings.tts.voice;
-    }
-    return true;
-  }
-
-  // Try immediately, then poll until voices load (Chrome extension fix)
-  function initVoices() {
-    if (populateVoices()) return; // loaded on first try
-    // Poll every 100ms for up to 3 seconds
-    let attempts = 0;
-    const poll = setInterval(() => {
-      attempts++;
-      if (populateVoices() || attempts > 30) clearInterval(poll);
-    }, 100);
-  }
-
-  // Also hook onvoiceschanged as backup
-  window.speechSynthesis.onvoiceschanged = populateVoices;
-  initVoices();
-  document.getElementById('ttsVoice').addEventListener('change', e => settings.tts.voice = e.target.value);
-
-  // Test voice button
-  document.getElementById('ttsTestBtn').addEventListener('click', async () => {
-    const btn = document.getElementById('ttsTestBtn');
-    btn.textContent = '⏳ Speaking...';
-    btn.disabled = true;
-    const prefix = settings.tts.sayName ? 'TestViewer asked. ' : '';
-    await speakText('Hello! This is your StreamBuddy AI voice. How does it sound?', null);
-    btn.textContent = '🔊 Test Voice Now';
-    btn.disabled = false;
-  });
-
-  // ── Streamer info ──
-  ['sName','sAge','sLocation','sPhone','sSetup','sStreamingFor','sAbout'].forEach(id => {
-    document.getElementById(id).addEventListener('input', e => {
-      const key = id.slice(1,2).toLowerCase() + id.slice(2);
-      settings.streamerInfo[key] = e.target.value;
-    });
-  });
-
-  // ── Test mode ──
-  document.getElementById('testModeBtn').addEventListener('click', () => {
-    switchTab('keywords');
-    document.getElementById('testInput').focus();
-  });
-  document.getElementById('testSendBtn').addEventListener('click', sendTestMessage);
-  document.getElementById('testInput').addEventListener('keydown', e => {
-    if (e.key === 'Enter') sendTestMessage();
-  });
-
-  // Quick test message buttons
-  document.getElementById('tqPhone').addEventListener('click', () => setTestMsg('which phone are you using?'));
-  document.getElementById('tqLocation').addEventListener('click', () => setTestMsg('where are you from?'));
-  document.getElementById('tqSetup').addEventListener('click', () => setTestMsg('what is your setup?'));
-  document.getElementById('tqAge').addEventListener('click', () => setTestMsg('how old are you?'));
-  document.getElementById('tqTime').addEventListener('click', () => setTestMsg('how long have you been streaming?'));
-
-  // Test link buttons
-  document.getElementById('testLinkCopyBtn').addEventListener('click', copyTestLink);
-  document.getElementById('testLinkOpenBtn').addEventListener('click', openTestLink);
-
-  populateUI();
-  renderKeywords();
-  updatePreview();
-  setPreviewOrient(settings.overlay.orientation || 'vertical');
-  showTemplateOptions(settings.overlay.template || 'tiktok');
-  loadTestLink(); // ← populate overlay test URL
-
-  // Re-scale on window resize
-  window.addEventListener('resize', () => setPreviewOrient(currentPreviewOrient));
-});
-
-// ── Deep merge ────────────────────────────────────────────────
-function deepMerge(target, source) {
-  const result = { ...target };
-  for (const key of Object.keys(source)) {
-    if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])) {
-      result[key] = deepMerge(target[key] || {}, source[key]);
-    } else {
-      result[key] = source[key];
-    }
-  }
-  return result;
+function readDB(name) {
+  const file = path.join(DB_PATH, `${name}.json`);
+  if (!fs.existsSync(file)) return {};
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return {}; }
 }
 
-// ── Feature toggle bar ────────────────────────────────────────
-function updateFeatureBar() {
-  setFeatureToggle('ft-overlay', 'ft-overlay-dot', settings.features.overlayEnabled);
-  setFeatureToggle('ft-chatreply', 'ft-chatreply-dot', settings.features.chatReplyEnabled);
-  setFeatureToggle('ft-voice', 'ft-voice-dot', settings.features.voiceEnabled);
+function writeDB(name, data) {
+  fs.writeFileSync(path.join(DB_PATH, `${name}.json`), JSON.stringify(data, null, 2));
 }
 
-function setFeatureToggle(btnId, dotId, active) {
-  const btn = document.getElementById(btnId);
-  const dot = document.getElementById(dotId);
-  if (active) {
-    btn.classList.add('active');
-    btn.classList.remove('inactive');
-    dot.classList.add('active');
-    dot.classList.remove('inactive');
-  } else {
-    btn.classList.remove('active');
-    btn.classList.add('inactive');
-    dot.classList.remove('active');
-    dot.classList.add('inactive');
-  }
+// Initialize DBs
+let licenses = readDB('licenses');
+let users = readDB('users'); // sessionId → { licenseKey, tiktokUsername, connectedAt }
+
+// ================================================================
+//  LICENSE KEY SYSTEM
+// ================================================================
+function generateLicenseKey() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const seg = () => Array.from({length:4}, () => chars[Math.floor(Math.random()*chars.length)]).join('');
+  return `NUMB-${seg()}-${seg()}-${seg()}`;
 }
 
-async function saveFeatures() {
-  await chrome.storage.local.set({ featureSettings: settings.features });
-  const stored = await chrome.storage.local.get(['sessionId']);
-  if (!stored.sessionId) return;
-  try {
-    // ✅ Use dedicated route — doesn't wipe other config like keywords/streamer info
-    await fetch(`${SERVER_URL}/api/features`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sessionId: stored.sessionId,
-        features: settings.features
-      })
-    });
-  } catch {}
-}
-function switchTab(name) {
-  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
-  document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));
+function isValidLicense(key) {
+  const lic = licenses[key];
+  if (!lic) return { valid: false, reason: 'Invalid license key' };
+  if (!lic.active) return { valid: false, reason: 'License has been revoked' };
+  if (lic.expiresAt && new Date() > new Date(lic.expiresAt)) return { valid: false, reason: 'License has expired' };
+  return { valid: true, license: lic };
 }
 
-// ── Preview orientation ───────────────────────────────────────
-function setPreviewOrient(orient) {
-  currentPreviewOrient = orient;
-  settings.overlay.orientation = orient;
-
-  const frame = document.getElementById('phoneFrame');
-  frame.className = 'phone-frame ' + orient;
-
-  // Scale the frame to fit preview area if needed
-  requestAnimationFrame(() => {
-    const area = document.querySelector('.preview-area');
-    const areaW = area.clientWidth - 32; // minus padding
-    const areaH = area.clientHeight - 32;
-    const frameW = orient === 'landscape' ? 360 : 190;
-    const frameH = orient === 'landscape' ? 202 : 360;
-    const scaleX = areaW / frameW;
-    const scaleY = areaH / frameH;
-    const scale = Math.min(scaleX, scaleY, 1); // never scale up, only down
-    frame.style.transform = scale < 1 ? `scale(${scale.toFixed(3)})` : '';
-  });
-
-  document.getElementById('pvOrientV').classList.toggle('active', orient === 'vertical');
-  document.getElementById('pvOrientL').classList.toggle('active', orient === 'landscape');
-
-  // Sync orient cards in overlay tab
-  document.querySelectorAll('.orient-card').forEach(c => {
-    c.classList.toggle('active', c.dataset.orient === orient);
-  });
-
-  updatePreview();
-}
-
-// ── Show/hide template-specific options ───────────────────────
-function showTemplateOptions(tpl) {
-  document.getElementById('tpl-opts-tiktok').style.display = tpl === 'tiktok' ? '' : 'none';
-  document.getElementById('tpl-opts-typewriter').style.display = tpl === 'typewriter' ? '' : 'none';
-  document.getElementById('tpl-opts-messenger').style.display = tpl === 'messenger' ? '' : 'none';
-}
-
-// ── Populate UI from settings ─────────────────────────────────
-function populateUI() {
-  // Bot
-  document.getElementById('onlyQuestions').checked = settings.bot.onlyReplyToQuestions;
-  document.getElementById('replyLanguage').value = settings.bot.replyLanguage;
-  document.getElementById('cooldown').value = settings.bot.replyCooldownSeconds;
-  document.getElementById('maxReplies').value = settings.bot.maxRepliesPerMinute;
-
-  // Streamer
-  document.getElementById('sName').value = settings.streamerInfo.name || '';
-  document.getElementById('sAge').value = settings.streamerInfo.age || '';
-  document.getElementById('sLocation').value = settings.streamerInfo.location || '';
-  document.getElementById('sPhone').value = settings.streamerInfo.phone || '';
-  document.getElementById('sSetup').value = settings.streamerInfo.setup || '';
-  document.getElementById('sStreamingFor').value = settings.streamerInfo.streamingFor || '';
-  document.getElementById('sAbout').value = settings.streamerInfo.about || '';
-
-  // Template
-  const tpl = settings.overlay.template || 'tiktok';
-  document.querySelectorAll('.template-card').forEach(c => c.classList.toggle('active', c.dataset.template === tpl));
-
-  // Layout
-  document.querySelectorAll('.layout-card').forEach(c => c.classList.toggle('active', c.dataset.layout === settings.overlay.layout));
-
-  // Orientation
-  document.querySelectorAll('.orient-card').forEach(c => c.classList.toggle('active', c.dataset.orient === (settings.overlay.orientation || 'vertical')));
-
-  // Colors
-  document.getElementById('customColor').value = settings.overlay.accentColor;
-  document.getElementById('customTextColor').value = settings.fonts.textColor;
-  document.getElementById('twColor').value = settings.typewriter.color || '#ffffff';
-  document.getElementById('msgColor').value = settings.messenger.bubbleColor || '#0b84ff';
-
-  // Ranges
-  setRangeValue('bgOpacity', settings.overlay.bgOpacity, Math.round(settings.overlay.bgOpacity * 100) + '%', 'bgOpacityVal');
-  setRangeValue('blurStrength', settings.overlay.blurStrength, settings.overlay.blurStrength + 'px', 'blurVal');
-  setRangeValue('borderRadius', settings.overlay.borderRadius, settings.overlay.borderRadius + 'px', 'radiusVal');
-  setRangeValue('cardWidth', settings.overlay.cardWidth, settings.overlay.cardWidth, 'widthVal');
-  setRangeValue('fontSize', settings.fonts.fontSize, settings.fonts.fontSize + 'px', 'fontSizeVal');
-  setRangeValue('letterSpacing', settings.fonts.letterSpacing, settings.fonts.letterSpacing, 'letterSpacingVal');
-  setRangeValue('lineHeight', settings.fonts.lineHeight, settings.fonts.lineHeight, 'lineHeightVal');
-  setRangeValue('questionFontSize', settings.fonts.questionFontSize, settings.fonts.questionFontSize + 'px', 'questionFontSizeVal');
-  setRangeValue('displayDuration', settings.animation.displayDuration, settings.animation.displayDuration + 's', 'durationVal');
-  setRangeValue('animSpeed', settings.animation.animSpeed, settings.animation.animSpeed + 's', 'animSpeedVal');
-  setRangeValue('twFontSize', settings.typewriter.fontSize || 32, (settings.typewriter.fontSize || 32) + 'px', 'twFontSizeVal');
-  setRangeValue('twGlow', settings.typewriter.glow || 12, (settings.typewriter.glow || 12) + 'px', 'twGlowVal');
-  setRangeValue('twSpeed', settings.typewriter.speed || 50, (settings.typewriter.speed || 50) + 'ms', 'twSpeedVal');
-  setRangeValue('msgFontSize', settings.messenger.fontSize || 20, (settings.messenger.fontSize || 20) + 'px', 'msgFontSizeVal');
-  setRangeValue('msgBgOpacity', settings.messenger.bgOpacity || 0.85, Math.round((settings.messenger.bgOpacity || 0.85) * 100) + '%', 'msgBgOpacityVal');
-
-  // Selects
-  document.getElementById('fontFamily').value = settings.fonts.fontFamily;
-  document.getElementById('fontWeight').value = settings.fonts.fontWeight;
-
-  // Checkboxes
-  document.getElementById('showProgress').checked = settings.animation.showProgress;
-  document.getElementById('showGlow').checked = settings.animation.showGlow;
-  document.getElementById('showBlur').checked = settings.animation.showBlur;
-  document.getElementById('showBadgeDot').checked = settings.animation.showBadgeDot;
-  document.getElementById('twCursor').checked = settings.typewriter.showCursor !== false;
-  document.getElementById('twShowQuestion').checked = settings.typewriter.showQuestion !== false;
-  document.getElementById('msgReadReceipts').checked = settings.messenger.readReceipts !== false;
-  document.getElementById('msgTimestamp').checked = settings.messenger.showTimestamp !== false;
-
-  // Features
-  if (settings.features) {
-    settings.features.voiceEnabled = settings.tts.enabled;
-    updateFeatureBar();
-  }
-
-  // Anim card
-  document.querySelectorAll('.anim-card').forEach(c => c.classList.toggle('active', c.dataset.anim === settings.animation.type));
-
-  // TTS
-  document.getElementById('ttsEnabled').checked = settings.tts.enabled;
-  document.getElementById('ttsOptions').style.display = settings.tts.enabled ? '' : 'none';
-  document.getElementById('kwSpeechField').style.display = settings.tts.enabled ? '' : 'none';
-  document.getElementById('ttsSpeakAI').checked = settings.tts.speakAI !== false;
-  document.getElementById('ttsSayName').checked = settings.tts.sayName === true;
-  // Engine
-  const eng = settings.tts.engine || 'browser';
-  document.querySelectorAll('.tts-engine-card').forEach(c => c.classList.toggle('active', c.dataset.engine === eng));
-  document.getElementById('browserVoiceOpts').style.display = eng === 'browser' ? '' : 'none';
-  document.getElementById('elevenlabsVoiceOpts').style.display = eng === 'elevenlabs' ? '' : 'none';
-  document.getElementById('googleVoiceOpts').style.display = eng === 'google' ? '' : 'none';
-  // Browser sliders
-  setRangeValue('ttsRate', settings.tts.rate || 1, (settings.tts.rate || 1).toFixed(1) + 'x', 'ttsRateVal');
-  setRangeValue('ttsPitch', settings.tts.pitch || 1, (settings.tts.pitch || 1).toFixed(1), 'ttsPitchVal');
-  setRangeValue('ttsVolume', settings.tts.volume ?? 1, Math.round((settings.tts.volume ?? 1) * 100) + '%', 'ttsVolumeVal');
-  // ElevenLabs sliders
-  setRangeValue('elStability', settings.tts.elStability ?? 0.5, (settings.tts.elStability ?? 0.5).toFixed(2), 'elStabilityVal');
-  setRangeValue('elSimilarity', settings.tts.elSimilarity ?? 0.75, (settings.tts.elSimilarity ?? 0.75).toFixed(2), 'elSimilarityVal');
-  setRangeValue('elVolume', settings.tts.elVolume ?? 1, Math.round((settings.tts.elVolume ?? 1) * 100) + '%', 'elVolumeVal');
-  // Google sliders
-  setRangeValue('googleRate', settings.tts.googleRate ?? 1, (settings.tts.googleRate ?? 1).toFixed(2) + 'x', 'googleRateVal');
-  setRangeValue('googlePitch', settings.tts.googlePitch ?? 0, (settings.tts.googlePitch ?? 0).toFixed(1), 'googlePitchVal');
-  setRangeValue('googleVolume', settings.tts.googleVolume ?? 1, Math.round((settings.tts.googleVolume ?? 1) * 100) + '%', 'googleVolumeVal');
-  if (settings.tts.googleVoiceType) document.getElementById('googleVoiceType').value = settings.tts.googleVoiceType;
-  if (settings.tts.enabled && eng === 'elevenlabs') loadElevenLabsVoices();
-  if (settings.tts.enabled && eng === 'google') loadGoogleVoices();
-}
-
-function setRangeValue(inputId, value, display, valId) {
-  const el = document.getElementById(inputId);
-  if (el) el.value = value;
-  const val = document.getElementById(valId);
-  if (val) val.textContent = display;
-}
-
-// ── Range slider helper ───────────────────────────────────────
-function setupRange(inputId, valId, formatter, onChange) {
-  const input = document.getElementById(inputId);
-  const valEl = document.getElementById(valId);
-  if (!input) return;
-  input.addEventListener('input', () => {
-    if (valEl) valEl.textContent = formatter(input.value);
-    onChange(input.value);
-  });
-}
-
-// ── Live preview update ───────────────────────────────────────
-function updatePreview() {
-  const tpl = settings.overlay.template || 'tiktok';
-
-  // Show correct card type
-  document.getElementById('pvTiktok').style.display = tpl === 'tiktok' ? '' : 'none';
-  document.getElementById('pvTypewriter').style.display = tpl === 'typewriter' ? '' : 'none';
-  document.getElementById('pvMessenger').style.display = tpl === 'messenger' ? '' : 'none';
-
-  // Position wrapper
-  const wrap = document.getElementById('pvWrap');
-  wrap.className = 'pv-wrap ' + layoutToClass(settings.overlay.layout);
-
-  if (tpl === 'tiktok') updateTiktokPreview();
-  else if (tpl === 'typewriter') updateTypewriterPreview();
-  else if (tpl === 'messenger') updateMessengerPreview();
-}
-
-function layoutToClass(layout) {
-  return { 'bottom-left': 'bl', 'bottom-right': 'br', 'top-left': 'tl', 'top-right': 'tr', 'center-bottom': 'cb', 'minimal': 'bl' }[layout] || 'bl';
-}
-
-// ── ElevenLabs voice loader ───────────────────────────────────
-async function loadElevenLabsVoices() {
-  const bar = document.getElementById('elStatusBar');
-  const sel = document.getElementById('elVoice');
-  bar.className = 'el-status-bar loading';
-  bar.textContent = '⏳ Loading ElevenLabs voices...';
-  bar.style.display = '';
-  try {
-    const stored = await chrome.storage.local.get(['sessionId']);
-    const res = await fetch(`${SERVER_URL}/api/tts/voices`);
-    const data = await res.json();
-    if (!data.available) {
-      bar.className = 'el-status-bar err';
-      bar.textContent = '❌ ' + (data.error || 'ElevenLabs not configured — add ELEVENLABS_API_KEY to Railway Variables');
-      sel.innerHTML = '<option value="">Not available</option>';
-      return;
-    }
-    // Populate voice dropdown grouped by category
-    const grouped = {};
-    data.voices.forEach(v => {
-      const cat = v.category || 'premade';
-      if (!grouped[cat]) grouped[cat] = [];
-      grouped[cat].push(v);
-    });
-    sel.innerHTML = Object.entries(grouped).map(([cat, voices]) =>
-      `<optgroup label="${cat.charAt(0).toUpperCase() + cat.slice(1)}">
-        ${voices.map(v => `<option value="${v.id}" ${v.id === settings.tts.elVoiceId ? 'selected' : ''}>${v.name}</option>`).join('')}
-      </optgroup>`
-    ).join('');
-    // Set default if none selected
-    if (!settings.tts.elVoiceId && data.voices.length) {
-      settings.tts.elVoiceId = data.voices[0].id;
-      sel.value = settings.tts.elVoiceId;
-    }
-    bar.className = 'el-status-bar ok';
-    bar.textContent = `✓ ${data.voices.length} ElevenLabs voices loaded`;
-    setTimeout(() => bar.style.display = 'none', 3000);
-  } catch (err) {
-    bar.className = 'el-status-bar err';
-    bar.textContent = '❌ Could not reach server — check Railway is running';
-  }
-}
-
-// ── TTS — speaks from settings page ──────────────────────────
-// OBS/TikTok Studio can't output audio, so speech runs here
-// ─────────────────────────────────────────────────────────────
-async function speakText(text, speechReply) {
-  if (!settings.tts.enabled) return;
-  const raw = (speechReply || text || '').trim();
-  if (!raw) return;
-
-  // Strip emojis
-  const clean = raw.replace(/[\u{1F300}-\u{1FFFF}]/gu, '')
-                   .replace(/[\u2600-\u27BF]/g, '')
-                   .replace(/\s+/g, ' ').trim();
-  if (!clean) return;
-
-  // ✅ Always cancel any currently playing speech first (prevents double TTS)
-  if (window.speechSynthesis) window.speechSynthesis.cancel();
-  if (elAudio) { elAudio.pause(); elAudio = null; }
-  if (googleAudio) { googleAudio.pause(); googleAudio = null; }
-
-  const engine = settings.tts.engine || 'browser';
-
-  if (engine === 'elevenlabs' && settings.tts.elVoiceId) {
-    await speakElevenLabs(clean);
-  } else if (engine === 'google' && settings.tts.googleVoice) {
-    await speakGoogle(clean);
-  } else {
-    speakBrowser(clean);
-  }
-}
-
-function speakBrowser(text) {
-  if (!window.speechSynthesis) return;
-  window.speechSynthesis.cancel();
-
-  function doSpeak() {
-    const utt = new SpeechSynthesisUtterance(text);
-    const voices = window.speechSynthesis.getVoices();
-    if (settings.tts.voice && voices.length) {
-      const chosen = voices.find(v => v.name === settings.tts.voice);
-      if (chosen) utt.voice = chosen;
-    }
-    utt.rate = settings.tts.rate || 1;
-    utt.pitch = settings.tts.pitch || 1;
-    utt.volume = settings.tts.volume ?? 1;
-    window.speechSynthesis.speak(utt);
-  }
-
-  // If voices not loaded yet, wait a moment then speak
-  const voices = window.speechSynthesis.getVoices();
-  if (voices.length) {
-    doSpeak();
-  } else {
-    setTimeout(doSpeak, 300);
-  }
-}
-
-let elAudio = null; // keep reference to stop previous audio
-async function speakElevenLabs(text) {
-  try {
-    // Stop any currently playing EL audio
-    if (elAudio) { elAudio.pause(); elAudio = null; }
-
-    const stored = await chrome.storage.local.get(['sessionId']);
-    const res = await fetch(`${SERVER_URL}/api/tts/speak`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        text,
-        voiceId: settings.tts.elVoiceId,
-        stability: settings.tts.elStability ?? 0.5,
-        similarityBoost: settings.tts.elSimilarity ?? 0.75,
-        sessionId: stored.sessionId || null
-      })
-    });
-
-    if (!res.ok) {
-      console.warn('ElevenLabs TTS failed:', res.status);
-      return; // don't fallback — prevents double TTS
-    }
-
-    // Play the streamed MP3 audio
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    elAudio = new Audio(url);
-    elAudio.volume = settings.tts.elVolume ?? 1;
-    elAudio.play();
-    elAudio.onended = () => { URL.revokeObjectURL(url); elAudio = null; };
-
-  } catch (err) {
-    console.warn('ElevenLabs error:', err.message);
-    // Don't fallback to browser — would cause double TTS
-  }
-}
-
-// ── Google Cloud TTS ──────────────────────────────────────────
-let allGoogleVoices = [];
-let googleAudio = null;
-
-async function loadGoogleVoices() {
-  const bar = document.getElementById('googleStatusBar');
-  const sel = document.getElementById('googleVoice');
-  bar.className = 'el-status-bar loading';
-  bar.textContent = '⏳ Loading Google voices...';
-  bar.style.display = '';
-  try {
-    const res = await fetch(`${SERVER_URL}/api/tts/google-voices`);
-    const data = await res.json();
-    if (!data.available) {
-      bar.className = 'el-status-bar err';
-      bar.textContent = '❌ ' + (data.error || 'Google TTS not configured — add GOOGLE_TTS_KEY to Railway Variables');
-      sel.innerHTML = '<option value="">Not available</option>';
-      return;
-    }
-    allGoogleVoices = data.voices;
-    filterGoogleVoices(settings.tts.googleVoiceType || 'Neural2');
-    bar.className = 'el-status-bar ok';
-    bar.textContent = `✓ ${data.voices.length} Google voices loaded`;
-    setTimeout(() => bar.style.display = 'none', 3000);
-  } catch (err) {
-    bar.className = 'el-status-bar err';
-    bar.textContent = '❌ Could not reach server';
-  }
-}
-
-function filterGoogleVoices(type) {
-  const sel = document.getElementById('googleVoice');
-  const filtered = allGoogleVoices.filter(v => v.type === type || v.name.includes(type));
-  if (!filtered.length) {
-    sel.innerHTML = '<option value="">No voices of this type found</option>';
-    return;
-  }
-  sel.innerHTML = filtered.map(v => {
-    const lang = v.languageCodes?.[0] || '';
-    const gender = v.gender === 'FEMALE' ? '♀' : v.gender === 'MALE' ? '♂' : '';
-    return `<option value="${v.name}" ${v.name === settings.tts.googleVoice ? 'selected' : ''}>${gender} ${v.name} (${lang})</option>`;
-  }).join('');
-  if (!settings.tts.googleVoice && filtered.length) {
-    // Default to English voice
-    const eng = filtered.find(v => v.languageCodes?.[0]?.startsWith('en')) || filtered[0];
-    settings.tts.googleVoice = eng.name;
-    sel.value = eng.name;
-  }
-}
-
-async function speakGoogle(text) {
-  try {
-    if (googleAudio) { googleAudio.pause(); googleAudio = null; }
-    const stored = await chrome.storage.local.get(['sessionId']);
-    const res = await fetch(`${SERVER_URL}/api/tts/google-speak`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        text,
-        voiceName: settings.tts.googleVoice,
-        speakingRate: settings.tts.googleRate ?? 1,
-        pitch: settings.tts.googlePitch ?? 0,
-        sessionId: stored.sessionId || null
-      })
-    });
-    if (!res.ok) {
-      console.warn('Google TTS failed:', res.status);
-      return; // don't fallback — prevents double TTS
-    }
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    googleAudio = new Audio(url);
-    googleAudio.volume = settings.tts.googleVolume ?? 1;
-    googleAudio.play();
-    googleAudio.onended = () => { URL.revokeObjectURL(url); googleAudio = null; };
-  } catch (err) {
-    console.warn('Google TTS error:', err.message);
-    // don't fallback — prevents double TTS
-  }
-}
-
-async function loadTestLink() {
-  const stored = await chrome.storage.local.get(['sessionId']);
-  const el = document.getElementById('testLinkUrl');
-  if (!el) return;
-  if (stored.sessionId) {
-    const url = `${SERVER_URL}/overlay/${stored.sessionId}?test=1`;
-    el.textContent = url;
-    el.title = url;
-    initSettingsSocket(stored.sessionId); // ✅ connect for live TTS
-  } else {
-    el.textContent = 'Activate your license first';
-    el.style.color = 'var(--muted)';
-  }
-}
-
-// ── Socket for live TTS — speaks on real stream replies ───────
-let settingsSocket = null;
-function initSettingsSocket(sessionId) {
-  if (settingsSocket) return;
-  // socket.io is loaded as a static script tag in settings.html
-  // No dynamic injection needed — io() is available globally
-  if (typeof io === 'undefined') {
-    console.warn('socket.io not loaded yet, retrying...');
-    setTimeout(() => initSettingsSocket(sessionId), 500);
-    return;
-  }
-  settingsSocket = io(SERVER_URL);
-  settingsSocket.on('connect', () => settingsSocket.emit('join', sessionId));
-
-  // Live stream replies — speak via TTS
-  settingsSocket.on('chat', data => {
-    if (!data.reply) return;
-    const shouldSpeak = data.replyType === 'quick' || settings.tts.speakAI !== false;
-    if (shouldSpeak) speakText(data.reply, data.speechReply);
-  });
-
-  // Test mode replies from server — speak via TTS
-  settingsSocket.on('test-chat', data => {
-    if (!data.reply) return;
-    const shouldSpeak = data.replyType === 'quick' || settings.tts.speakAI !== false;
-    if (shouldSpeak) speakText(data.reply, data.speechReply);
-  });
-}
-
-function copyTestLink() {
-  const url = document.getElementById('testLinkUrl').textContent;
-  if (!url || url.includes('Activate')) return;
-  navigator.clipboard.writeText(url).then(() => {
-    const btn = document.getElementById('testLinkCopyBtn');
-    btn.textContent = '✓ Copied!';
-    btn.classList.add('copied');
-    setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
-  });
-}
-
-function openTestLink() {
-  const url = document.getElementById('testLinkUrl').textContent;
-  if (!url || url.includes('Activate')) return;
-  chrome.tabs.create({ url });
-}
-
-function updateTiktokPreview() {
-  const color = settings.overlay.accentColor;
-  const tk = document.getElementById('pvTiktok');
-  const blur = settings.animation.showBlur ? `blur(${settings.overlay.blurStrength}px)` : 'none';
-  const glow = settings.animation.showGlow ? `0 4px 16px rgba(0,0,0,0.6), 0 0 8px ${color}50` : '0 4px 16px rgba(0,0,0,0.6)';
-  tk.style.background = `rgba(0,0,0,${settings.overlay.bgOpacity})`;
-  tk.style.border = `2px solid ${color}cc`;
-  tk.style.borderRadius = Math.min(settings.overlay.borderRadius, 12) + 'px';
-  tk.style.backdropFilter = blur;
-  tk.style.boxShadow = glow;
-
-  document.getElementById('pvHeader').style.background = color + 'e6';
-  document.getElementById('pvProgress').style.background = color + '80';
-  document.getElementById('pvProgress').style.display = settings.animation.showProgress ? '' : 'none';
-
-  const reply = document.getElementById('pvReply');
-  reply.style.fontFamily = settings.fonts.fontFamily;
-  reply.style.fontSize = Math.round(settings.fonts.fontSize * 0.42) + 'px';
-  reply.style.fontWeight = settings.fonts.fontWeight;
-  reply.style.color = settings.fonts.textColor;
-  reply.style.letterSpacing = settings.fonts.letterSpacing + 'px';
-  reply.style.lineHeight = settings.fonts.lineHeight;
-}
-
-function updateTypewriterPreview() {
-  const tw = document.getElementById('pvTypewriter');
-  const color = settings.typewriter.color || '#ffffff';
-  const glow = settings.typewriter.glow || 12;
-  tw.style.color = color;
-  tw.style.textShadow = glow > 0 ? `0 0 ${glow}px ${color}80, 0 0 ${glow * 2}px ${color}30` : 'none';
-  tw.style.fontSize = Math.round((settings.typewriter.fontSize || 32) * 0.3) + 'px';
-  const cursor = document.getElementById('pvCursor');
-  cursor.style.display = settings.typewriter.showCursor ? 'inline-block' : 'none';
-  cursor.style.height = Math.round((settings.typewriter.fontSize || 32) * 0.3) + 'px';
-}
-
-function updateMessengerPreview() {
-  const color = settings.messenger.bubbleColor || '#0b84ff';
-  const bgAlpha = settings.messenger.bgOpacity || 0.85;
-  const fs = Math.round((settings.messenger.fontSize || 20) * 0.38) + 'px';
-
-  // Parse the bubble color to create a dark background
-  const bg = hexToRgba(color, 0.08);
-  const pvMsg = document.getElementById('pvMessenger');
-  pvMsg.style.background = `rgba(10,10,26,${bgAlpha})`;
-  pvMsg.style.borderRadius = '8px';
-  pvMsg.style.padding = '5px';
-
-  document.getElementById('pvMsgR').style.background = color;
-  document.getElementById('pvMsgR').style.fontSize = fs;
-  document.getElementById('pvMsgQ').style.fontSize = fs;
-
-  const meta = document.getElementById('pvMsgMeta');
-  meta.style.display = (settings.messenger.readReceipts || settings.messenger.showTimestamp) ? 'flex' : 'none';
-  document.getElementById('pvMsgRead').style.display = settings.messenger.readReceipts ? '' : 'none';
-  document.getElementById('pvMsgTime').style.display = settings.messenger.showTimestamp ? '' : 'none';
-}
-
-function hexToRgba(hex, alpha) {
-  const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
-  return `rgba(${r},${g},${b},${alpha})`;
-}
-
-// ── Test mode ─────────────────────────────────────────────────
-function setTestMsg(msg) {
-  document.getElementById('testInput').value = msg;
-  document.getElementById('testInput').focus();
-}
-
-async function sendTestMessage() {
-  const msg = document.getElementById('testInput').value.trim();
-  if (!msg) return;
-
-  const btn = document.getElementById('testSendBtn');
-  const status = document.getElementById('testStatus');
-  btn.disabled = true;
-  status.className = 'test-status thinking';
-  status.textContent = '🤔 Bot is thinking...';
-
-  // Check for keyword match — whole-word only to avoid "age" matching "rampage"
-  const kwMatch = settings.keywords.find(kw =>
-    kw.keywords.some(k => {
-      const escaped = k.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      return new RegExp(`\\b${escaped}\\b`, 'i').test(msg);
-    })
+function getLicenseByTikTok(tiktokUsername) {
+  return Object.entries(licenses).find(([k, v]) => 
+    v.tiktokUsername && v.tiktokUsername.toLowerCase() === tiktokUsername.toLowerCase()
   );
+}
 
-  if (kwMatch) {
-    const reply = fillTemplate(kwMatch.reply, 'testviewer', settings.streamerInfo);
-    const speechReply = kwMatch.speechReply ? fillTemplate(kwMatch.speechReply, 'testviewer', settings.streamerInfo) : null;
-    showTestReply(msg, reply, 'quick');
-    speakText(reply, speechReply); // ✅ speak from settings page
-    status.className = 'test-status ok';
-    status.textContent = '⚡ Quick keyword reply matched!';
-    btn.disabled = false;
-    return;
-  }
+// ================================================================
+//  ACTIVE CONNECTIONS (in-memory, one per user session)
+// ================================================================
+const activeConnections = new Map(); // sessionId → { tiktokConn, stats, messages, replyTimestamps }
 
-  // Otherwise simulate AI reply using streamer info
-  const stored = await chrome.storage.local.get(['sessionId']);
-  if (!stored.sessionId) {
-    // Offline test — build a simulated reply from streamer info
-    const reply = simulateAIReply(msg, settings.streamerInfo);
-    showTestReply(msg, reply, 'ai');
-    if (settings.tts.speakAI !== false) speakText(reply, null); // ✅ speak AI reply
-    status.className = 'test-status ok';
-    status.textContent = '✓ Simulated AI reply (not connected to server)';
-    btn.disabled = false;
-    return;
+function getSession(sessionId) {
+  if (!activeConnections.has(sessionId)) {
+    activeConnections.set(sessionId, {
+      tiktokConn: null,
+      isConnected: false,
+      tiktokUsername: null,
+      stats: { messages: 0, replies: 0, quickReplies: 0, aiReplies: 0, gifts: 0, likes: 0, followers: 0 },
+      messages: [],
+      replyTimestamps: [],
+      config: null
+    });
   }
+  return activeConnections.get(sessionId);
+}
+
+// ================================================================
+//  BOT LOGIC
+// ================================================================
+function fillTemplate(template, username = '', streamerInfo = {}) {
+  return template
+    .replace(/\{name\}/g, streamerInfo.name || '')
+    .replace(/\{age\}/g, streamerInfo.age || '')
+    .replace(/\{phone\}/g, streamerInfo.phone || '')
+    .replace(/\{setup\}/g, streamerInfo.setup || '')
+    .replace(/\{location\}/g, streamerInfo.location || '')
+    .replace(/\{streamingFor\}/g, streamerInfo.streamingFor || '')
+    .replace(/\{about\}/g, streamerInfo.about || '')
+    .replace(/\{username\}/g, username);
+}
+
+function checkQuickReply(message, username, quickReplies, streamerInfo) {
+  for (const qr of (quickReplies || [])) {
+    for (const kw of qr.keywords) {
+      // ✅ Whole-word match — "age" won't fire inside "rampage", "package", "erage" etc.
+      // Escapes special regex chars in keyword, then wraps with \b word boundaries
+      const escaped = kw.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(`\\b${escaped}\\b`, 'i');
+      if (regex.test(message)) {
+        return {
+          reply: fillTemplate(qr.reply, username, streamerInfo),
+          speechReply: qr.speechReply ? fillTemplate(qr.speechReply, username, streamerInfo) : null
+        };
+      }
+    }
+  }
+  return null;
+}
+
+function canReply(session) {
+  const now = Date.now();
+  const cfg = session.config?.bot || {};
+  const maxPerMin = cfg.maxRepliesPerMinute || 10;
+  const cooldownMs = (cfg.replyCooldownSeconds || 3) * 1000;
+
+  session.replyTimestamps = session.replyTimestamps.filter(t => t > now - 60000);
+  if (session.replyTimestamps.length >= maxPerMin) return false;
+  const last = session.replyTimestamps[session.replyTimestamps.length - 1];
+  if (last && (now - last) < cooldownMs) return false;
+  return true;
+}
+
+async function generateAIReply(message, username, streamerInfo, replyLanguage) {
+  const info = streamerInfo || {};
+  const prompt = `You are a friendly TikTok live stream chatbot for streamer ${info.name || 'the streamer'}.
+Reply to viewer messages in a casual, warm, short way (1-2 sentences MAX).
+Always use "I" as the streamer. Be energetic and use 1-2 emojis max.
+Reply in ${replyLanguage || 'English'}.
+
+Streamer facts:
+- Name: ${info.name || 'unknown'}
+- Age: ${info.age || 'unknown'}
+- From: ${info.location || 'unknown'}
+- Phone: ${info.phone || 'unknown'}
+- Setup: ${info.setup || 'unknown'}
+- Streaming for: ${info.streamingFor || 'unknown'}
+- About: ${info.about || ''}
+
+Keep replies under 150 characters.
+Now reply to: @${username} says: "${message}"`;
 
   try {
-    const res = await fetch(`${SERVER_URL}/api/test-reply`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId: stored.sessionId, message: msg, username: 'TestViewer' })
-    });
-    if (res.ok) {
-      const data = await res.json();
-      if (data.reply) {
-        showTestReply(msg, data.reply, data.replyType || 'ai');
-        // ✅ Don't call speakText here — the socket 'chat' event fires too
-        // and would cause double TTS. Speech is handled by initSettingsSocket listener.
-        status.className = 'test-status ok';
-        status.textContent = `✓ ${data.replyType === 'quick' ? 'Keyword' : 'AI'} reply received!`;
-      } else {
-        status.className = 'test-status err';
-        status.textContent = '⚠ No reply — message may not match any keywords or AI settings';
-      }
-    } else {
-      throw new Error('Server error');
-    }
-  } catch {
-    // Fallback to simulation
-    const reply = simulateAIReply(msg, settings.streamerInfo);
-    showTestReply(msg, reply, 'ai');
-    status.className = 'test-status ok';
-    status.textContent = '✓ Simulated reply (server offline)';
-  }
-
-  btn.disabled = false;
-}
-
-function simulateAIReply(msg, info) {
-  const lower = msg.toLowerCase();
-  // ✅ Whole-word matching helper
-  const hasWord = (...words) => words.some(w => new RegExp(`\\b${w}\\b`, 'i').test(msg));
-
-  if (hasWord('phone', 'iphone', 'device', 'mobile')) return info.phone ? `I use ${info.phone} for streaming! 📱` : "I'll share my phone details soon! 📱";
-  if (hasWord('from', 'country', 'location', 'where')) return info.location ? `I'm from ${info.location}! 🌍` : "I'll share where I'm from soon!";
-  if (hasWord('setup', 'gear', 'pc', 'computer', 'equipment')) return info.setup ? `My setup: ${info.setup} 🖥️` : "I'll share my setup details soon!";
-  if (hasWord('age', 'old', 'born')) return info.age ? `I'm ${info.age} years old! 😊` : "That's a secret! 🤫";
-  if (hasWord('stream', 'streaming', 'long', 'since', 'started')) return info.streamingFor ? `I've been streaming for ${info.streamingFor}! 🎮` : "I've been streaming for a while now!";
-  if (hasWord('name', 'who', 'call')) return info.name ? `My name is ${info.name}! 👋` : "You can call me Streamer! 👋";
-  return info.about ? info.about.substring(0, 80) + (info.about.length > 80 ? '...' : '') : "Thanks for the question! 🙏 Follow for more!";
-}
-
-function fillTemplate(template, username, info) {
-  return template
-    .replace(/\{username\}/g, username)
-    .replace(/\{name\}/g, info.name || '')
-    .replace(/\{age\}/g, info.age || '')
-    .replace(/\{location\}/g, info.location || '')
-    .replace(/\{phone\}/g, info.phone || '')
-    .replace(/\{setup\}/g, info.setup || '');
-}
-
-function showTestReply(question, reply, type) {
-  // Update preview card with test content
-  const qText = `@TestViewer: "${question.substring(0, 50)}${question.length > 50 ? '…' : ''}"`;
-  const replyText = reply;
-
-  document.getElementById('pvQuestion').textContent = qText;
-  document.getElementById('pvReply').textContent = replyText;
-  document.getElementById('pvTwText').textContent = replyText;
-  document.getElementById('pvMsgQ').textContent = `@TestViewer: ${question.substring(0, 40)}`;
-  document.getElementById('pvMsgR').textContent = replyText;
-  document.getElementById('pvMsgTime').textContent = new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
-}
-
-// ── Keywords ──────────────────────────────────────────────────
-function renderKeywords() {
-  const list = document.getElementById('keywordList');
-  if (settings.keywords.length === 0) {
-    list.innerHTML = '<div style="color:var(--muted);font-size:11px;text-align:center;padding:14px">No keywords yet. Add one below!</div>';
-    return;
-  }
-  list.innerHTML = settings.keywords.map((kw, i) => `
-    <div class="keyword-item">
-      <div class="kw-keywords">${kw.keywords.map(k => `<span class="kw-tag">${k}</span>`).join('')}</div>
-      <div class="kw-reply">${kw.reply}</div>
-      ${kw.speechReply ? `<div style="font-size:10px;color:var(--yellow);margin-top:4px;padding-right:48px">🔊 ${kw.speechReply}</div>` : ''}
-      <div class="kw-actions">
-        <button class="kw-btn kw-edit" data-i="${i}">✏️</button>
-        <button class="kw-btn kw-delete" data-i="${i}">🗑️</button>
-      </div>
-    </div>
-  `).join('');
-  list.querySelectorAll('.kw-edit').forEach(btn => btn.addEventListener('click', () => openKwModal(parseInt(btn.dataset.i))));
-  list.querySelectorAll('.kw-delete').forEach(btn => btn.addEventListener('click', () => { settings.keywords.splice(parseInt(btn.dataset.i), 1); renderKeywords(); }));
-}
-
-function openKwModal(index) {
-  editingKeywordIndex = index;
-  document.getElementById('kwModalTitle').textContent = index === -1 ? 'Add Keyword Reply' : 'Edit Keyword Reply';
-  if (index >= 0) {
-    document.getElementById('kwKeywords').value = settings.keywords[index].keywords.join(', ');
-    document.getElementById('kwReply').value = settings.keywords[index].reply;
-    document.getElementById('kwSpeechReply').value = settings.keywords[index].speechReply || '';
-  } else {
-    document.getElementById('kwKeywords').value = '';
-    document.getElementById('kwReply').value = '';
-    document.getElementById('kwSpeechReply').value = '';
-  }
-  // Show speech field only if TTS is enabled
-  document.getElementById('kwSpeechField').style.display = settings.tts.enabled ? '' : 'none';
-  document.getElementById('kwModal').classList.add('open');
-}
-
-function closeKwModal() { document.getElementById('kwModal').classList.remove('open'); }
-
-function saveKeyword() {
-  const keywords = document.getElementById('kwKeywords').value.split(',').map(k => k.trim()).filter(Boolean);
-  const reply = document.getElementById('kwReply').value.trim();
-  const speechReply = document.getElementById('kwSpeechReply').value.trim() || null;
-  if (!keywords.length || !reply) return;
-  const kw = { keywords, reply };
-  if (speechReply) kw.speechReply = speechReply;
-  if (editingKeywordIndex >= 0) settings.keywords[editingKeywordIndex] = kw;
-  else settings.keywords.push(kw);
-  closeKwModal();
-  renderKeywords();
-}
-
-// ── Save all ──────────────────────────────────────────────────
-async function saveAll() {
-  const btn = document.getElementById('saveBtn');
-  btn.textContent = 'Saving...';
-  btn.disabled = true;
-
-  await chrome.storage.local.set({ overlaySettings: settings });
-
-  const stored = await chrome.storage.local.get(['sessionId']);
-  if (stored.sessionId) {
-    try {
-      await fetch(`${SERVER_URL}/api/settings`, {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
+      {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          sessionId: stored.sessionId,
-          streamerInfo: settings.streamerInfo,
-          quickReplies: settings.keywords,
-          bot: settings.bot,
-          overlayConfig: {
-            overlay: settings.overlay,
-            fonts: settings.fonts,
-            animation: settings.animation,
-            typewriter: settings.typewriter,
-            messenger: settings.messenger,
-            tts: settings.tts
-          },
-          features: settings.features
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { maxOutputTokens: 100, temperature: 0.8 }
         })
-      });
-    } catch {}
+      }
+    );
+    const data = await res.json();
+    return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || null;
+  } catch (err) {
+    console.error('AI error:', err.message);
+    return null;
+  }
+}
+
+function isQuestion(message) {
+  const lower = message.toLowerCase();
+  return ['?','what','which','how','who','where','when','why','can you','do you','are you','is your'].some(w => lower.includes(w));
+}
+
+// ── Reply to TikTok chat using bot account ────────────────────
+// Uses the bot account's session cookie to post a comment
+// Rate limited to protect the bot account from being flagged
+const replyQueue = new Map(); // sessionId → queue of pending replies
+const replyInProgress = new Set();
+
+async function replyToTikTokChat(sessionId, message, replyText) {
+  const session = activeConnections.get(sessionId);
+  if (!session) return;
+
+  const botCfg = session.config?.botAccount;
+  if (!botCfg?.enabled || !botCfg?.sessionId) {
+    console.log(`[${sessionId.slice(0,8)}] ⚠️ Bot reply skipped — bot not enabled or no session`);
+    return;
   }
 
-  btn.textContent = 'Saved ✓';
-  btn.classList.add('saved');
-  showToast('✓ Settings saved!');
-  setTimeout(() => { btn.textContent = 'Save All'; btn.classList.remove('saved'); btn.disabled = false; }, 2000);
+  // Queue replies to avoid spamming TikTok
+  if (!replyQueue.has(sessionId)) replyQueue.set(sessionId, []);
+  replyQueue.get(sessionId).push({ message, replyText });
+  processReplyQueue(sessionId);
 }
 
-function showToast(msg) {
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.classList.add('show');
-  setTimeout(() => t.classList.remove('show'), 2500);
+async function processReplyQueue(sessionId) {
+  if (replyInProgress.has(sessionId)) return;
+  const queue = replyQueue.get(sessionId);
+  if (!queue?.length) return;
+
+  replyInProgress.add(sessionId);
+  const { message, replyText } = queue.shift();
+
+  try {
+    const session = activeConnections.get(sessionId);
+    const botCfg = session?.config?.botAccount;
+
+    if (!botCfg?.sessionId) {
+      console.log(`[${sessionId.slice(0,8)}] ⚠️ Bot skipped — no sessionId in botCfg`);
+      return;
+    }
+
+    const roomId = session?.roomId;
+    if (!roomId) {
+      console.log(`[${sessionId.slice(0,8)}] ⚠️ Bot skipped — no roomId (not live yet?)`);
+      return;
+    }
+
+    const cookieStr = `sessionid=${botCfg.sessionId}; tt-target-idc=${botCfg.ttTargetIdc || 'useast2a'}`;
+    console.log(`[${sessionId.slice(0,8)}] 🤖 Bot posting comment to room ${roomId}...`);
+
+    const res = await fetch('https://webcast.tiktok.com/webcast/room/chat/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Cookie': cookieStr,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': `https://www.tiktok.com/@${session?.tiktokUsername}/live`,
+        'Origin': 'https://www.tiktok.com',
+        'Accept': 'application/json, text/plain, */*'
+      },
+      body: new URLSearchParams({
+        room_id: roomId,
+        content: replyText,
+        type: '1',
+        aid: '1988',
+        app_name: 'tiktok_web',
+        device_platform: 'web_pc'
+      })
+    });
+
+    const rawText = await res.text();
+    console.log(`[${sessionId.slice(0,8)}] 📡 TikTok reply ${res.status}: ${rawText.substring(0, 300)}`);
+
+    let data = {};
+    try { data = JSON.parse(rawText); } catch {}
+
+    if (data.status_code === 0) {
+      console.log(`[${sessionId.slice(0,8)}] ✅ Bot comment posted!`);
+    } else {
+      console.log(`[${sessionId.slice(0,8)}] ⚠️ status_code=${data.status_code} trying alternate...`);
+      await tryAlternateCommentEndpoint(sessionId, roomId, replyText, cookieStr, session);
+    }
+
+  } catch (err) {
+    console.error(`[${sessionId.slice(0,8)}] ❌ Bot reply error:`, err.message);
+  } finally {
+    replyInProgress.delete(sessionId);
+    const session = activeConnections.get(sessionId);
+    const delay = (session?.config?.botAccount?.replyDelay || 3) * 1000;
+    setTimeout(() => processReplyQueue(sessionId), delay);
+  }
 }
+
+// Alternate TikTok comment endpoint (older API)
+async function tryAlternateCommentEndpoint(sessionId, roomId, replyText, cookieStr, session) {
+  try {
+    console.log(`[${sessionId.slice(0,8)}] 🔄 Trying alternate comment endpoint...`);
+    const res = await fetch('https://www.tiktok.com/api/live/comment/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Cookie': cookieStr,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Referer': `https://www.tiktok.com/@${session?.tiktokUsername}/live`,
+        'Origin': 'https://www.tiktok.com'
+      },
+      body: new URLSearchParams({
+        room_id: roomId,
+        content: replyText,
+        type: '1',
+        aid: '1988'
+      })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (data.status_code === 0) {
+      console.log(`[${sessionId.slice(0,8)}] ✅ Bot replied via alternate endpoint`);
+    } else {
+      console.log(`[${sessionId.slice(0,8)}] ⚠️ Alternate endpoint: ${data.status_code} — ${data.message || 'unknown'}`);
+    }
+  } catch (e) {
+    console.error(`[${sessionId.slice(0,8)}] ❌ Alternate endpoint error:`, e.message);
+  }
+}
+
+async function handleChatMessage(data, sessionId) {
+  const session = activeConnections.get(sessionId);
+  if (!session) return;
+
+  const username = data.uniqueId || data.nickname || 'viewer';
+  const message = data.comment || '';
+  if (!message.trim()) return;
+
+  session.stats.messages++;
+
+  const cfg = session.config || {};
+  const msgObj = {
+    id: Date.now() + Math.random(),
+    type: 'chat',
+    username,
+    message,
+    timestamp: new Date().toLocaleTimeString(),
+    reply: null,
+    speechReply: null,
+    replyType: null
+  };
+
+  const quickResult = checkQuickReply(message, username, cfg.quickReplies, cfg.streamerInfo);
+  if (quickResult && canReply(session)) {
+    msgObj.reply = quickResult.reply;
+    msgObj.speechReply = quickResult.speechReply; // ✅ separate speech text
+    msgObj.replyType = 'quick';
+    session.stats.quickReplies++;
+    session.stats.replies++;
+    session.replyTimestamps.push(Date.now());
+  } else if (!quickResult && canReply(session)) {
+    const shouldReply = cfg.bot?.onlyReplyToQuestions ? isQuestion(message) : true;
+    if (shouldReply) {
+      const aiReply = await generateAIReply(message, username, cfg.streamerInfo, cfg.bot?.replyLanguage);
+      if (aiReply) {
+        msgObj.reply = aiReply;
+        msgObj.speechReply = null; // AI replies use the reply text itself for speech
+        msgObj.replyType = 'ai';
+        session.stats.aiReplies++;
+        session.stats.replies++;
+        session.replyTimestamps.push(Date.now());
+      }
+    }
+  }
+
+  session.messages.unshift(msgObj);
+  if (session.messages.length > 100) session.messages.pop();
+
+  // ✅ Always read config fresh from disk — in-memory config can be stale
+  // This ensures features and botAccount are always current
+  const diskLicenses = readDB('licenses');
+  const diskUsers = readDB('users');
+  const diskUser = diskUsers[sessionId];
+  const diskConfig = diskUser ? (diskLicenses[diskUser.licenseKey]?.config || {}) : {};
+
+  // Merge disk config into session.config to keep it current
+  if (diskConfig && Object.keys(diskConfig).length) {
+    session.config = diskConfig;
+  }
+
+  const features = diskConfig.features || {};
+  const botAccount = diskConfig.botAccount || {};
+
+  // Only emit to overlay if overlay feature is enabled (default: true)
+  if (features.overlayEnabled !== false) {
+    io.to(sessionId).emit('chat', msgObj);
+  }
+  io.to(sessionId).emit('stats', session.stats);
+
+  console.log(`[${sessionId.slice(0,8)}] 💬 @${username}: ${message}`);
+  if (msgObj.reply) {
+    console.log(`[${sessionId.slice(0,8)}]    🤖 (${msgObj.replyType}): ${msgObj.reply}`);
+    console.log(`[${sessionId.slice(0,8)}] 🔍 chatReply=${features.chatReplyEnabled} bot.enabled=${botAccount.enabled} hasSession=${!!botAccount.sessionId} roomId=${session?.roomId}`);
+    if (features.chatReplyEnabled === true && botAccount.enabled && botAccount.sessionId) {
+      await replyToTikTokChat(sessionId, message, msgObj.reply);
+    }
+  }
+}
+
+async function connectToTikTok(sessionId, tiktokUsername, tiktokSessionId, ttTargetIdc) {
+  const session = getSession(sessionId);
+
+  if (session.tiktokConn) {
+    try { session.tiktokConn.disconnect(); } catch {}
+    session.tiktokConn = null;
+  }
+
+  console.log(`[${sessionId.slice(0,8)}] 🔗 Connecting to @${tiktokUsername}...`);
+
+  // ── Attach all event listeners to a successful connection ──
+  function attachListeners(conn) {
+    conn.on('chat', data => {
+      console.log(`[${sessionId.slice(0,8)}] 📨 Raw chat: ${data.uniqueId}: ${data.comment}`);
+      handleChatMessage(data, sessionId);
+    });
+    conn.on('gift', data => {
+      session.stats.gifts++;
+      const event = { id: Date.now(), type: 'gift', username: data.uniqueId, giftName: data.giftName || 'a gift', timestamp: new Date().toLocaleTimeString() };
+      session.messages.unshift(event);
+      io.to(sessionId).emit('event', event);
+      io.to(sessionId).emit('stats', session.stats);
+    });
+    conn.on('follow', data => {
+      session.stats.followers++;
+      const event = { id: Date.now(), type: 'follow', username: data.uniqueId, timestamp: new Date().toLocaleTimeString() };
+      session.messages.unshift(event);
+      io.to(sessionId).emit('event', event);
+      io.to(sessionId).emit('stats', session.stats);
+    });
+    conn.on('like', data => {
+      session.stats.likes += data.likeCount || 1;
+      io.to(sessionId).emit('stats', session.stats);
+    });
+    conn.on('disconnected', () => {
+      session.isConnected = false;
+      io.to(sessionId).emit('status', { connected: false, error: 'Stream ended' });
+    });
+    conn.on('error', err => {
+      session.isConnected = false;
+      io.to(sessionId).emit('status', { connected: false, error: err.message });
+    });
+  }
+
+  // ── Try one region, returns { success, conn } or throws ──
+  async function tryRegion(sessionIdCookie, idc) {
+    // ✅ CRITICAL FIX: constructor throws synchronously if tt-target-idc is
+    // missing when sessionId is set — wrap it in try/catch to prevent server crash
+    let conn;
+    try {
+      conn = new WebcastPushConnection(tiktokUsername, {
+        sessionId: sessionIdCookie,
+        'tt-target-idc': idc
+      });
+    } catch (constructErr) {
+      throw new Error(`Constructor failed (${idc}): ${constructErr.message}`);
+    }
+    const state = await conn.connect(); // throws if not live
+    return { conn, state };
+  }
+
+  // ── Build ordered list of regions to try ──
+  async function tryConnect(sessionIdCookie, extIdc) {
+    const IDC_REGIONS = ['alisg', 'useast2a', 'maliva', 'alisg2', 'sg', 'i18n'];
+    const candidates = [];
+
+    // 1. Extension-supplied idc first
+    if (extIdc) candidates.push(extIdc);
+
+    // 2. Auto-detect from TikTok API
+    try {
+      const idcRes = await fetch('https://www.tiktok.com/api/user/detail/?uniqueId=' + tiktokUsername, {
+        headers: {
+          'Cookie': `sessionid=${sessionIdCookie}`,
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        },
+        signal: AbortSignal.timeout(5000)
+      });
+      const setCookie = idcRes.headers.get('set-cookie') || '';
+      const idcMatch = setCookie.match(/tt-target-idc=([^;]+)/);
+      if (idcMatch?.[1] && !candidates.includes(idcMatch[1])) {
+        candidates.unshift(idcMatch[1]);
+        console.log(`[${sessionId.slice(0,8)}] 🌍 Auto-detected region: ${idcMatch[1]}`);
+      }
+    } catch {}
+
+    // 3. All known regions as fallback
+    for (const r of IDC_REGIONS) {
+      if (!candidates.includes(r)) candidates.push(r);
+    }
+
+    // Try each candidate
+    for (const idc of candidates) {
+      console.log(`[${sessionId.slice(0,8)}] 🔄 Trying region: ${idc}`);
+      try {
+        const { conn, state } = await tryRegion(sessionIdCookie, idc);
+        console.log(`[${sessionId.slice(0,8)}] ✅ Connected! Region: ${idc} Room: ${state.roomId}`);
+        session.tiktokConn = conn;
+        session.tiktokUsername = tiktokUsername;
+        session.isConnected = true;
+        session.roomId = state.roomId; // ✅ store for bot replies
+        io.to(sessionId).emit('status', { connected: true, username: tiktokUsername, roomId: state.roomId });
+        attachListeners(conn);
+        return { success: true };
+      } catch (err) {
+        console.log(`[${sessionId.slice(0,8)}] ❌ Region ${idc} failed: ${err.message}`);
+      }
+    }
+
+    // All regions with sessionId failed — try once without any sessionId (public streams)
+    console.log(`[${sessionId.slice(0,8)}] 🔄 Trying without sessionId (public stream)...`);
+    try {
+      const conn = new WebcastPushConnection(tiktokUsername, {});
+      const state = await conn.connect();
+      console.log(`[${sessionId.slice(0,8)}] ✅ Connected (no session)! Room: ${state.roomId}`);
+      session.tiktokConn = conn;
+      session.tiktokUsername = tiktokUsername;
+      session.isConnected = true;
+      session.roomId = state.roomId; // ✅ store roomId for bot replies
+      io.to(sessionId).emit('status', { connected: true, username: tiktokUsername, roomId: state.roomId });
+      attachListeners(conn);
+      return { success: true };
+    } catch (err) {
+      console.log(`[${sessionId.slice(0,8)}] ❌ No-session fallback failed: ${err.message}`);
+    }
+
+    const errMsg = 'Could not connect. Make sure you are LIVE on TikTok right now.';
+    console.error(`[${sessionId.slice(0,8)}] ❌ All connection attempts failed`);
+    io.to(sessionId).emit('status', { connected: false, error: errMsg });
+    return { success: false, error: errMsg };
+  }
+
+  if (tiktokSessionId) {
+    return tryConnect(tiktokSessionId, ttTargetIdc);
+  } else {
+    // No sessionId at all — try public connection directly
+    console.log(`[${sessionId.slice(0,8)}] 🔄 No sessionId, trying public connection...`);
+    try {
+      const conn = new WebcastPushConnection(tiktokUsername, {});
+      const state = await conn.connect();
+      session.tiktokConn = conn;
+      session.tiktokUsername = tiktokUsername;
+      session.isConnected = true;
+      session.roomId = state.roomId; // ✅ store roomId for bot replies
+      io.to(sessionId).emit('status', { connected: true, username: tiktokUsername, roomId: state.roomId });
+      attachListeners(conn);
+      return { success: true };
+    } catch (err) {
+      session.isConnected = false;
+      const errMsg = err.message || 'Connection failed. Make sure you are LIVE on TikTok.';
+      io.to(sessionId).emit('status', { connected: false, error: errMsg });
+      return { success: false, error: errMsg };
+    }
+  }
+}
+
+// ================================================================
+//  EXTENSION API ROUTES
+// ================================================================
+
+// Check version for auto-update
+app.get('/api/version', (req, res) => {
+  res.json({ version: CURRENT_VERSION });
+});
+
+// Validate license key + get config
+app.post('/api/validate', (req, res) => {
+  const { licenseKey, tiktokUsername } = req.body;
+  if (!licenseKey) return res.json({ success: false, error: 'License key required' });
+
+  const check = isValidLicense(licenseKey);
+  if (!check.valid) return res.json({ success: false, error: check.reason });
+
+  const lic = check.license;
+
+  // Bind key to TikTok username on first use
+  if (!lic.tiktokUsername && tiktokUsername) {
+    lic.tiktokUsername = tiktokUsername;
+    licenses[licenseKey] = lic;
+    writeDB('licenses', licenses);
+  }
+
+  // Enforce one TikTok per license
+  if (lic.tiktokUsername && tiktokUsername && lic.tiktokUsername.toLowerCase() !== tiktokUsername.toLowerCase()) {
+    return res.json({ success: false, error: `This key is registered to @${lic.tiktokUsername}` });
+  }
+
+  // Issue a session ID for this device
+  const sessionId = uuidv4();
+  users[sessionId] = { licenseKey, tiktokUsername: tiktokUsername || lic.tiktokUsername, connectedAt: new Date().toISOString() };
+  writeDB('users', users);
+
+  res.json({
+    success: true,
+    sessionId,
+    config: lic.config || getDefaultConfig(lic),
+    expiresAt: lic.expiresAt || null,
+    plan: lic.plan || 'lifetime'
+  });
+});
+
+// Connect to TikTok live
+app.post('/api/connect', async (req, res) => {
+  const { sessionId, tiktokUsername, tiktokSessionId, ttTargetIdc } = req.body;
+
+  // Reload users from disk on every request (survives Railway restarts)
+  users = readDB('users');
+  licenses = readDB('licenses');
+
+  // If session not found, try to recover by re-validating via TikTok username
+  if (!sessionId) return res.json({ success: false, error: 'Session ID required' });
+
+  if (!users[sessionId]) {
+    // Session lost after server restart — find license by TikTok username
+    const found = getLicenseByTikTok(tiktokUsername);
+    if (!found) return res.json({ success: false, error: 'Session expired. Please re-activate your license in the extension.' });
+    const [licKey, lic] = found;
+    // Re-register the session
+    users[sessionId] = { licenseKey: licKey, tiktokUsername, connectedAt: new Date().toISOString() };
+    writeDB('users', users);
+  }
+
+  const session = getSession(sessionId);
+  const lic = licenses[users[sessionId].licenseKey];
+  session.config = lic?.config || getDefaultConfig(lic);
+
+  // ✅ FIX: Await the TikTok connection so we return real success/failure
+  const result = await connectToTikTok(sessionId, tiktokUsername, tiktokSessionId, ttTargetIdc);
+  if (result.success) {
+    res.json({ success: true });
+  } else {
+    res.json({ success: false, error: result.error });
+  }
+});
+
+// Disconnect
+app.post('/api/disconnect', (req, res) => {
+  const { sessionId } = req.body;
+  const session = activeConnections.get(sessionId);
+  if (session?.tiktokConn) {
+    try { session.tiktokConn.disconnect(); } catch {}
+    session.isConnected = false;
+  }
+  res.json({ success: true });
+});
+
+// Get messages & stats
+app.get('/api/messages/:sessionId', (req, res) => {
+  const session = activeConnections.get(req.params.sessionId);
+  res.json(session?.messages || []);
+});
+
+app.get('/api/stats/:sessionId', (req, res) => {
+  const session = activeConnections.get(req.params.sessionId);
+  res.json(session?.stats || {});
+});
+
+// Overlay page (per user)
+app.get('/overlay/:sessionId', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'overlay.html'));
+});
+
+// Get user settings — called by settings page on load
+app.get('/api/settings/:sessionId', (req, res) => {
+  users = readDB('users');
+  licenses = readDB('licenses');
+  const user = users[req.params.sessionId];
+  if (!user) return res.json({});
+  const lic = licenses[user.licenseKey];
+  const config = lic?.config || {};
+  res.json({
+    streamerInfo: config.streamerInfo || {},
+    quickReplies: config.quickReplies || [],
+    bot: config.bot || {},
+    overlayConfig: config.overlayConfig || {},
+    features: config.features || { overlayEnabled: true, chatReplyEnabled: false, voiceEnabled: false }
+  });
+});
+
+// Update only feature flags — doesn't touch other config
+app.post('/api/features', (req, res) => {
+  const { sessionId, features } = req.body;
+  if (!sessionId || !features) return res.json({ success: false });
+  users = readDB('users');
+  licenses = readDB('licenses');
+  const user = users[sessionId];
+  if (!user) return res.json({ success: false });
+  const licKey = user.licenseKey;
+  if (!licenses[licKey]) return res.json({ success: false });
+  if (!licenses[licKey].config) licenses[licKey].config = {};
+  licenses[licKey].config.features = features;
+  writeDB('licenses', licenses);
+  // Update active session immediately
+  const session = activeConnections.get(sessionId);
+  if (session) {
+    if (!session.config) session.config = {};
+    session.config.features = features;
+    console.log(`[${sessionId.slice(0,8)}] 🔧 Features: overlay=${features.overlayEnabled} chatReply=${features.chatReplyEnabled} voice=${features.voiceEnabled}`);
+  }
+  res.json({ success: true });
+});
+
+// Save user settings (keywords, streamer info, overlay config)
+app.post('/api/settings', (req, res) => {
+  const { sessionId, streamerInfo, quickReplies, bot, overlayConfig, features } = req.body;
+  users = readDB('users');
+  licenses = readDB('licenses');
+  if (!sessionId || !users[sessionId]) return res.json({ success: false, error: 'Invalid session' });
+
+  const licKey = users[sessionId].licenseKey;
+  if (!licenses[licKey]) return res.json({ success: false, error: 'License not found' });
+
+  // Preserve botAccount config across settings saves
+  const existingBotAccount = licenses[licKey].config?.botAccount || {};
+
+  licenses[licKey].config = {
+    streamerInfo: streamerInfo || {},
+    quickReplies: quickReplies || [],
+    bot: bot || {},
+    overlayConfig: overlayConfig || {},
+    features: features || { overlayEnabled: true, chatReplyEnabled: false, voiceEnabled: false },
+    botAccount: existingBotAccount // ✅ never overwrite bot credentials on settings save
+  };
+  writeDB('licenses', licenses);
+
+  const session = activeConnections.get(sessionId);
+  if (session) session.config = licenses[licKey].config;
+
+  res.json({ success: true });
+});
+
+// Test reply — called from settings page test mode
+app.post('/api/test-reply', async (req, res) => {
+  const { sessionId, message, username } = req.body;
+  if (!sessionId) return res.json({ reply: null });
+
+  users = readDB('users');
+  licenses = readDB('licenses');
+  const user = users[sessionId];
+  if (!user) return res.json({ reply: null });
+
+  const lic = licenses[user.licenseKey];
+  const config = lic?.config || {};
+
+  // Check keyword match — whole-word only to avoid "age" matching "rampage"
+  const kwMatch = (config.quickReplies || []).find(kw =>
+    kw.keywords.some(k => {
+      const escaped = k.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return new RegExp(`\\b${escaped}\\b`, 'i').test(message);
+    })
+  );
+
+  let reply, speechReply, replyType;
+  if (kwMatch) {
+    reply = fillTemplate(kwMatch.reply, username || 'TestViewer', config.streamerInfo || {});
+    speechReply = kwMatch.speechReply ? fillTemplate(kwMatch.speechReply, username || 'TestViewer', config.streamerInfo || {}) : null;
+    replyType = 'quick';
+  } else {
+    reply = await generateAIReply(message, username || 'TestViewer', config);
+    speechReply = null;
+    replyType = 'ai';
+  }
+
+  if (reply) {
+    // ✅ Emit to the overlay via Socket.IO so it shows in OBS/TikTok Studio
+    io.to(sessionId).emit('test-chat', {
+      username: username || 'TestViewer',
+      message,
+      reply,
+      speechReply,
+      replyType
+    });
+  }
+
+  res.json({ reply: reply || null, speechReply, replyType });
+});
+
+// ================================================================
+//  ELEVENLABS TTS — API key never leaves the server
+// ================================================================
+
+// Get available ElevenLabs voices (cached 10 min)
+let elVoicesCache = null;
+let elVoicesCacheTime = 0;
+
+app.get('/api/tts/voices', async (req, res) => {
+  if (!ELEVENLABS_API_KEY) {
+    return res.json({ available: false, error: 'ElevenLabs API key not set in Railway Variables' });
+  }
+  // Return cache if fresh
+  if (elVoicesCache && Date.now() - elVoicesCacheTime < 600000) {
+    return res.json({ available: true, voices: elVoicesCache });
+  }
+  try {
+    const r = await fetch('https://api.elevenlabs.io/v1/voices', {
+      headers: {
+        'xi-api-key': ELEVENLABS_API_KEY.trim(), // ✅ trim whitespace from key
+        'Content-Type': 'application/json'
+      }
+    });
+    if (!r.ok) {
+      elVoicesCache = null; // ✅ clear cache on auth failure
+      throw new Error(`ElevenLabs returned ${r.status}`);
+    }
+    const data = await r.json();
+    elVoicesCache = data.voices.map(v => ({
+      id: v.voice_id,
+      name: v.name,
+      category: v.category || 'premade',
+      preview_url: v.preview_url || null
+    }));
+    elVoicesCacheTime = Date.now();
+    res.json({ available: true, voices: elVoicesCache });
+  } catch (err) {
+    console.error('ElevenLabs voices error:', err.message);
+    res.json({ available: false, error: err.message });
+  }
+});
+
+// Text-to-speech via ElevenLabs — returns audio as mp3
+app.post('/api/tts/speak', async (req, res) => {
+  if (!ELEVENLABS_API_KEY) {
+    return res.status(503).json({ error: 'ElevenLabs API key not configured on server' });
+  }
+
+  const { text, voiceId, stability, similarityBoost, sessionId } = req.body;
+  if (!text || !voiceId) return res.status(400).json({ error: 'text and voiceId required' });
+
+  // Verify the session exists
+  if (sessionId) {
+    users = readDB('users');
+    if (!users[sessionId]) return res.status(401).json({ error: 'Invalid session' });
+  }
+
+  // Strip emojis server-side
+  const clean = text
+    .replace(/[\u{1F300}-\u{1FFFF}]/gu, '')
+    .replace(/[\u2600-\u27BF]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!clean) return res.status(400).json({ error: 'No speakable text after cleaning' });
+
+  try {
+    const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+      method: 'POST',
+      headers: {
+        'xi-api-key': ELEVENLABS_API_KEY.trim(), // ✅ trim whitespace
+        'Content-Type': 'application/json',
+        'Accept': 'audio/mpeg'
+      },
+      body: JSON.stringify({
+        text: clean,
+        model_id: 'eleven_turbo_v2_5',
+        voice_settings: {
+          stability: stability ?? 0.5,
+          similarity_boost: similarityBoost ?? 0.75,
+          style: 0.3,
+          use_speaker_boost: true
+        }
+      })
+    });
+
+    if (!r.ok) {
+      const errText = await r.text();
+      console.error('ElevenLabs TTS error:', r.status, errText);
+      return res.status(r.status).json({ error: `ElevenLabs error: ${r.status}` });
+    }
+
+    // ✅ FIX: node-fetch v3 uses Web Streams — must use arrayBuffer, NOT .pipe()
+    // .pipe() is a Node.js stream method and doesn't exist on Web ReadableStream
+    // Using .pipe() caused the server to crash with an unhandled exception
+    const audioBuffer = await r.arrayBuffer();
+    res.set('Content-Type', 'audio/mpeg');
+    res.set('Cache-Control', 'no-cache');
+    res.set('Content-Length', audioBuffer.byteLength);
+    res.send(Buffer.from(audioBuffer));
+
+  } catch (err) {
+    console.error('ElevenLabs TTS fetch error:', err.message);
+    if (!res.headersSent) res.status(500).json({ error: err.message });
+  }
+});
+
+// ================================================================
+//  GOOGLE CLOUD TTS — Service account JSON stored in Railway var
+// ================================================================
+
+// Google OAuth2 token cache
+let googleTokenCache = null;
+let googleTokenExpiry = 0;
+
+async function getGoogleAccessToken() {
+  // Return cached token if still valid (with 60s buffer)
+  if (googleTokenCache && Date.now() < googleTokenExpiry - 60000) {
+    return googleTokenCache;
+  }
+
+  if (!GOOGLE_TTS_KEY) throw new Error('GOOGLE_TTS_KEY not set in Railway Variables');
+
+  let serviceAccount;
+  try {
+    serviceAccount = JSON.parse(GOOGLE_TTS_KEY);
+  } catch {
+    throw new Error('GOOGLE_TTS_KEY is not valid JSON — paste the full service account file');
+  }
+
+  // Build JWT for Google OAuth2
+  const now = Math.floor(Date.now() / 1000);
+  const header = { alg: 'RS256', typ: 'JWT' };
+  const payload = {
+    iss: serviceAccount.client_email,
+    scope: 'https://www.googleapis.com/auth/cloud-platform',
+    aud: 'https://oauth2.googleapis.com/token',
+    iat: now,
+    exp: now + 3600
+  };
+
+  // Encode JWT parts
+  const enc = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64url');
+  const signingInput = `${enc(header)}.${enc(payload)}`;
+
+  // Sign with RSA private key using Node.js crypto
+  const { createSign } = await import('crypto');
+  const sign = createSign('RSA-SHA256');
+  sign.update(signingInput);
+  const signature = sign.sign(serviceAccount.private_key, 'base64url');
+  const jwt = `${signingInput}.${signature}`;
+
+  // Exchange JWT for access token
+  const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}`
+  });
+
+  if (!tokenRes.ok) {
+    const err = await tokenRes.text();
+    throw new Error(`Google auth failed: ${err}`);
+  }
+
+  const tokenData = await tokenRes.json();
+  googleTokenCache = tokenData.access_token;
+  googleTokenExpiry = Date.now() + (tokenData.expires_in * 1000);
+  return googleTokenCache;
+}
+
+// Get Google TTS voices list
+let googleVoicesCache = null;
+let googleVoicesCacheTime = 0;
+
+app.get('/api/tts/google-voices', async (req, res) => {
+  if (!GOOGLE_TTS_KEY) {
+    return res.json({ available: false, error: 'GOOGLE_TTS_KEY not set in Railway Variables' });
+  }
+  if (googleVoicesCache && Date.now() - googleVoicesCacheTime < 3600000) {
+    return res.json({ available: true, voices: googleVoicesCache });
+  }
+  try {
+    const token = await getGoogleAccessToken();
+    const r = await fetch('https://texttospeech.googleapis.com/v1/voices', {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    if (!r.ok) throw new Error(`Google TTS returned ${r.status}`);
+    const data = await r.json();
+
+    // Filter to only high-quality voices — Neural2, WaveNet, Studio, Chirp
+    const quality = ['Neural2', 'WaveNet', 'Studio', 'Chirp', 'Journey'];
+    googleVoicesCache = data.voices
+      .filter(v => quality.some(q => v.name.includes(q)))
+      .map(v => ({
+        name: v.name,
+        languageCodes: v.languageCodes,
+        gender: v.ssmlGender,
+        type: quality.find(q => v.name.includes(q)) || 'Standard',
+        naturalSampleRateHertz: v.naturalSampleRateHertz
+      }))
+      .sort((a, b) => {
+        // Sort: Neural2 first, then WaveNet, then others
+        const order = ['Neural2', 'Studio', 'Journey', 'Chirp', 'WaveNet'];
+        return order.indexOf(a.type) - order.indexOf(b.type);
+      });
+
+    googleVoicesCacheTime = Date.now();
+    res.json({ available: true, voices: googleVoicesCache });
+  } catch (err) {
+    console.error('Google TTS voices error:', err.message);
+    res.json({ available: false, error: err.message });
+  }
+});
+
+// Google TTS synthesize
+app.post('/api/tts/google-speak', async (req, res) => {
+  if (!GOOGLE_TTS_KEY) {
+    return res.status(503).json({ error: 'GOOGLE_TTS_KEY not configured on server' });
+  }
+
+  const { text, voiceName, languageCode, speakingRate, pitch, sessionId } = req.body;
+  if (!text || !voiceName) return res.status(400).json({ error: 'text and voiceName required' });
+
+  if (sessionId) {
+    users = readDB('users');
+    if (!users[sessionId]) return res.status(401).json({ error: 'Invalid session' });
+  }
+
+  const clean = text
+    .replace(/[\u{1F300}-\u{1FFFF}]/gu, '')
+    .replace(/[\u2600-\u27BF]/g, '')
+    .replace(/\s+/g, ' ').trim();
+
+  if (!clean) return res.status(400).json({ error: 'No speakable text' });
+
+  try {
+    const token = await getGoogleAccessToken();
+    const r = await fetch('https://texttospeech.googleapis.com/v1/text:synthesize', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        input: { text: clean },
+        voice: {
+          languageCode: languageCode || voiceName.split('-').slice(0, 2).join('-'),
+          name: voiceName
+        },
+        audioConfig: {
+          audioEncoding: 'MP3',
+          speakingRate: speakingRate ?? 1.0,
+          pitch: pitch ?? 0,
+          effectsProfileId: ['headphone-class-device']
+        }
+      })
+    });
+
+    if (!r.ok) {
+      const errText = await r.text();
+      console.error('Google TTS error:', r.status, errText);
+      return res.status(r.status).json({ error: `Google TTS error: ${r.status}` });
+    }
+
+    const data = await r.json();
+    // Google returns base64-encoded MP3
+    const audioBuffer = Buffer.from(data.audioContent, 'base64');
+    res.set('Content-Type', 'audio/mpeg');
+    res.set('Cache-Control', 'no-cache');
+    res.set('Content-Length', audioBuffer.byteLength);
+    res.send(audioBuffer);
+
+  } catch (err) {
+    console.error('Google TTS fetch error:', err.message);
+    if (!res.headersSent) res.status(500).json({ error: err.message });
+  }
+});
+
+// Save bot account credentials for a session
+app.post('/api/bot-account', (req, res) => {
+  const { sessionId, botUsername, botSessionId, botTtTargetIdc, enabled, replyDelay } = req.body;
+  if (!sessionId) return res.json({ success: false, error: 'Session required' });
+
+  users = readDB('users');
+  licenses = readDB('licenses');
+  const user = users[sessionId];
+  if (!user) return res.json({ success: false, error: 'Invalid session' });
+
+  // Store bot account config in the license config
+  const lic = licenses[user.licenseKey];
+  if (!lic) return res.json({ success: false, error: 'License not found' });
+  if (!lic.config) lic.config = {};
+  lic.config.botAccount = {
+    enabled: enabled !== false,
+    username: botUsername || '',
+    sessionId: botSessionId || '',
+    ttTargetIdc: botTtTargetIdc || '',
+    replyDelay: replyDelay || 3
+  };
+  licenses[user.licenseKey] = lic;
+  writeDB('licenses', licenses);
+
+  // Also update active session config if connected
+  const session = activeConnections.get(sessionId);
+  if (session) {
+    // ✅ session.config may be null if bot saved before Start Bot clicked
+    if (!session.config) session.config = {};
+    session.config.botAccount = lic.config.botAccount;
+  }
+
+  console.log(`[${sessionId.slice(0,8)}] 🤖 Bot account updated: @${botUsername} (enabled: ${enabled})`);
+  res.json({ success: true });
+});
+
+// Get bot account status
+app.get('/api/bot-account/:sessionId', (req, res) => {
+  users = readDB('users');
+  licenses = readDB('licenses');
+  const user = users[req.params.sessionId];
+  if (!user) return res.json({ enabled: false });
+  const lic = licenses[user.licenseKey];
+  const botCfg = lic?.config?.botAccount || {};
+  // Never send the session cookie back to client
+  res.json({
+    enabled: botCfg.enabled || false,
+    username: botCfg.username || '',
+    hasSession: !!botCfg.sessionId,
+    replyDelay: botCfg.replyDelay || 3
+  });
+});
+
+// Get overlay config for a session (used by overlay.html)
+app.get('/api/overlay-config/:sessionId', (req, res) => {
+  users = readDB('users');
+  licenses = readDB('licenses');
+  const user = users[req.params.sessionId];
+  if (!user) return res.json({});
+  const lic = licenses[user.licenseKey];
+  // ✅ Return full overlayConfig including template, typewriter, messenger
+  res.json(lic?.config?.overlayConfig || {});
+});
+
+// ================================================================
+//  ADMIN API ROUTES (password protected)
+// ================================================================
+function adminAuth(req, res, next) {
+  const pwd = req.headers['x-admin-password'] || req.query.pwd;
+  if (pwd !== ADMIN_PASSWORD) return res.status(401).json({ error: 'Unauthorized' });
+  next();
+}
+
+// Get all licenses
+app.get('/admin/licenses', adminAuth, (req, res) => {
+  res.json(licenses);
+});
+
+// Create a new license key
+app.post('/admin/licenses', adminAuth, (req, res) => {
+  const { plan = 'monthly', email = '', daysValid = 30, note = '' } = req.body;
+  const key = generateLicenseKey();
+  const expiresAt = plan === 'lifetime' ? null : new Date(Date.now() + daysValid * 86400000).toISOString();
+
+  licenses[key] = {
+    key,
+    plan,
+    email,
+    note,
+    active: true,
+    createdAt: new Date().toISOString(),
+    expiresAt,
+    tiktokUsername: null,
+    config: null
+  };
+  writeDB('licenses', licenses);
+  res.json({ success: true, key, expiresAt });
+});
+
+// Revoke a license
+app.post('/admin/licenses/:key/revoke', adminAuth, (req, res) => {
+  if (!licenses[req.params.key]) return res.json({ success: false, error: 'Key not found' });
+  licenses[req.params.key].active = false;
+  writeDB('licenses', licenses);
+  res.json({ success: true });
+});
+
+// Reactivate a license
+app.post('/admin/licenses/:key/activate', adminAuth, (req, res) => {
+  if (!licenses[req.params.key]) return res.json({ success: false, error: 'Key not found' });
+  licenses[req.params.key].active = true;
+  writeDB('licenses', licenses);
+  res.json({ success: true });
+});
+
+// Extend expiry
+app.post('/admin/licenses/:key/extend', adminAuth, (req, res) => {
+  const { days = 30 } = req.body;
+  const lic = licenses[req.params.key];
+  if (!lic) return res.json({ success: false, error: 'Key not found' });
+  const base = lic.expiresAt && new Date(lic.expiresAt) > new Date() ? new Date(lic.expiresAt) : new Date();
+  lic.expiresAt = new Date(base.getTime() + days * 86400000).toISOString();
+  writeDB('licenses', licenses);
+  res.json({ success: true, expiresAt: lic.expiresAt });
+});
+
+// Stats overview
+app.get('/admin/stats', adminAuth, (req, res) => {
+  const total = Object.keys(licenses).length;
+  const active = Object.values(licenses).filter(l => l.active).length;
+  const expired = Object.values(licenses).filter(l => l.expiresAt && new Date() > new Date(l.expiresAt)).length;
+  const online = activeConnections.size;
+  res.json({ total, active, expired, online });
+});
+
+// Admin dashboard page — served without auth (login is handled client-side)
+app.get('/admin', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+});
+
+// ================================================================
+//  SOCKET.IO
+// ================================================================
+io.on('connection', (socket) => {
+  socket.on('join', (sessionId) => {
+    socket.join(sessionId);
+    const session = activeConnections.get(sessionId);
+    if (session) {
+      socket.emit('init', { messages: session.messages, stats: session.stats, isConnected: session.isConnected });
+    }
+  });
+});
+
+// ================================================================
+//  HELPERS
+// ================================================================
+function getDefaultConfig(lic) {
+  return {
+    streamerInfo: {
+      name: lic?.email?.split('@')[0] || 'Streamer',
+      age: '',
+      location: '',
+      phone: '',
+      setup: '',
+      streamingFor: '',
+      about: ''
+    },
+    bot: {
+      onlyReplyToQuestions: false,
+      replyCooldownSeconds: 3,
+      maxRepliesPerMinute: 10,
+      replyLanguage: 'English'
+    },
+    quickReplies: [
+      { keywords: ['hi', 'hello', 'hey', 'hola', 'salam'], reply: 'Hey {username}! Welcome to the stream! 👋🔥' },
+      { keywords: ['from', 'country', 'location', 'where'], reply: "I'm from {location}! 🌍" },
+      { keywords: ['age', 'old', 'born'], reply: "I'm {age} years old! 🎂" },
+      { keywords: ['phone', 'iphone', 'android'], reply: 'I use {phone} for streaming! 📱' },
+      { keywords: ['setup', 'equipment', 'gear', 'pc'], reply: 'My setup: {setup} 🎙️' },
+      { keywords: ['name', 'who are you'], reply: 'My name is {name}! Nice to meet you 👋' }
+    ]
+  };
+}
+
+// ================================================================
+//  START
+// ================================================================
+httpServer.listen(PORT, () => {
+  console.log(`
+╔══════════════════════════════════════════════════╗
+║   NUMB Chatbot Server — Running on port ${PORT}    ║
+╠══════════════════════════════════════════════════╣
+║  Dashboard:  http://localhost:${PORT}               ║
+║  Admin:      http://localhost:${PORT}/admin?pwd=... ║
+║  Version:    ${CURRENT_VERSION}                             ║
+╚══════════════════════════════════════════════════╝
+  `);
+});
+
+// ================================================================
+//  GLOBAL CRASH GUARDS — keeps Railway alive on unexpected errors
+// ================================================================
+process.on('uncaughtException', (err) => {
+  console.error('🔥 Uncaught Exception (server kept alive):', err.message);
+  console.error(err.stack);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('🔥 Unhandled Promise Rejection (server kept alive):', reason);
+});
