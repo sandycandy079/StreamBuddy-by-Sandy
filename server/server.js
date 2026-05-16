@@ -205,9 +205,12 @@ async function replyToTikTokChat(sessionId, message, replyText) {
   if (!session) return;
 
   const botCfg = session.config?.botAccount;
-  if (!botCfg?.enabled || !botCfg?.sessionId || !botCfg?.ttTargetIdc) return;
+  if (!botCfg?.enabled || !botCfg?.sessionId) {
+    console.log(`[${sessionId.slice(0,8)}] ⚠️ Bot reply skipped — bot not enabled or no session`);
+    return;
+  }
 
-  // Queue to avoid spamming TikTok
+  // Queue replies to avoid spamming TikTok
   if (!replyQueue.has(sessionId)) replyQueue.set(sessionId, []);
   replyQueue.get(sessionId).push({ message, replyText });
   processReplyQueue(sessionId);
@@ -226,51 +229,129 @@ async function processReplyQueue(sessionId) {
     const botCfg = session?.config?.botAccount;
     if (!botCfg?.sessionId) return;
 
-    // Get the room ID from the active TikTok connection
-    const roomId = session?.tiktokConn?.roomId || session?.roomId;
+    // Get room ID — stored when TikTok live connects
+    const roomId = session?.roomId;
     if (!roomId) {
-      console.log(`[${sessionId.slice(0,8)}] ⚠️ Bot reply skipped — no room ID yet`);
+      console.log(`[${sessionId.slice(0,8)}] ⚠️ Bot reply skipped — not connected to live yet`);
       return;
     }
 
-    // TikTok live chat comment endpoint
-    const url = 'https://www.tiktok.com/api/live/comment/';
-    const params = new URLSearchParams({
+    console.log(`[${sessionId.slice(0,8)}] 🤖 Bot sending: "${replyText.substring(0, 50)}"`);
+
+    // Step 1: Get msToken and ttwid by hitting TikTok homepage with bot session
+    let msToken = '';
+    let ttwid = '';
+    try {
+      const homeRes = await fetch('https://www.tiktok.com/', {
+        headers: {
+          'Cookie': `sessionid=${botCfg.sessionId}; tt-target-idc=${botCfg.ttTargetIdc || 'useast2a'}`,
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.5'
+        }
+      });
+      const setCookies = homeRes.headers.get('set-cookie') || '';
+      const msTokenMatch = setCookies.match(/msToken=([^;]+)/);
+      const ttwidMatch = setCookies.match(/ttwid=([^;]+)/);
+      msToken = msTokenMatch?.[1] || '';
+      ttwid = ttwidMatch?.[1] || '';
+    } catch (e) {
+      console.log(`[${sessionId.slice(0,8)}] ⚠️ Could not get msToken: ${e.message}`);
+    }
+
+    // Build full cookie string
+    const cookieStr = [
+      `sessionid=${botCfg.sessionId}`,
+      botCfg.ttTargetIdc ? `tt-target-idc=${botCfg.ttTargetIdc}` : '',
+      msToken ? `msToken=${msToken}` : '',
+      ttwid ? `ttwid=${ttwid}` : ''
+    ].filter(Boolean).join('; ');
+
+    // Step 2: Post comment to TikTok live
+    // Correct endpoint for TikTok LIVE comments (webcast)
+    const commentUrl = `https://webcast.tiktok.com/webcast/room/chat/`;
+    const queryParams = new URLSearchParams({
       aid: '1988',
       app_name: 'tiktok_web',
       device_platform: 'web_pc',
+      browser_language: 'en-US',
+      browser_platform: 'Win32',
+      browser_name: 'Mozilla',
+      browser_version: '5.0 (Windows NT 10.0; Win64; x64)',
+      room_id: roomId
     });
 
-    const res = await fetch(`${url}?${params}`, {
+    const commentRes = await fetch(`${commentUrl}?${queryParams}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
-        'Cookie': `sessionid=${botCfg.sessionId}; tt-target-idc=${botCfg.ttTargetIdc}`,
+        'Cookie': cookieStr,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': `https://www.tiktok.com/@${session.tiktokUsername}/live`,
+        'Origin': 'https://www.tiktok.com',
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'en-US,en;q=0.5'
+      },
+      body: new URLSearchParams({
+        content: replyText,
+        type: '1',
+        room_id: roomId
+      })
+    });
+
+    const rawText = await commentRes.text();
+    let data = {};
+    try { data = JSON.parse(rawText); } catch {}
+
+    if (data.status_code === 0 || commentRes.status === 200) {
+      console.log(`[${sessionId.slice(0,8)}] ✅ Bot replied: "${replyText.substring(0, 40)}"`);
+    } else {
+      console.log(`[${sessionId.slice(0,8)}] ⚠️ Bot reply status: ${data.status_code} — ${data.message || rawText.substring(0, 100)}`);
+
+      // If auth failed, try alternate endpoint
+      if (data.status_code === 4003110 || data.status_code === 4003111 || commentRes.status === 401) {
+        await tryAlternateCommentEndpoint(sessionId, roomId, replyText, cookieStr, session);
+      }
+    }
+
+  } catch (err) {
+    console.error(`[${sessionId.slice(0,8)}] ❌ Bot reply error:`, err.message);
+  } finally {
+    replyInProgress.delete(sessionId);
+    const session = activeConnections.get(sessionId);
+    const delay = (session?.config?.botAccount?.replyDelay || 3) * 1000;
+    setTimeout(() => processReplyQueue(sessionId), delay);
+  }
+}
+
+// Alternate TikTok comment endpoint (older API)
+async function tryAlternateCommentEndpoint(sessionId, roomId, replyText, cookieStr, session) {
+  try {
+    console.log(`[${sessionId.slice(0,8)}] 🔄 Trying alternate comment endpoint...`);
+    const res = await fetch('https://www.tiktok.com/api/live/comment/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Cookie': cookieStr,
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Referer': 'https://www.tiktok.com/',
+        'Referer': `https://www.tiktok.com/@${session?.tiktokUsername}/live`,
         'Origin': 'https://www.tiktok.com'
       },
       body: new URLSearchParams({
         room_id: roomId,
         content: replyText,
-        type: '1'
+        type: '1',
+        aid: '1988'
       })
     });
-
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
     if (data.status_code === 0) {
-      console.log(`[${sessionId.slice(0,8)}] 🤖 Bot replied in chat: "${replyText.substring(0, 40)}..."`);
+      console.log(`[${sessionId.slice(0,8)}] ✅ Bot replied via alternate endpoint`);
     } else {
-      console.log(`[${sessionId.slice(0,8)}] ⚠️ Bot reply failed: ${data.status_code} — ${data.status_msg || 'unknown'}`);
+      console.log(`[${sessionId.slice(0,8)}] ⚠️ Alternate endpoint: ${data.status_code} — ${data.message || 'unknown'}`);
     }
-  } catch (err) {
-    console.error(`[${sessionId.slice(0,8)}] ❌ Bot reply error:`, err.message);
-  } finally {
-    replyInProgress.delete(sessionId);
-    // Delay between replies to avoid TikTok flagging (2-4 seconds)
-    const session = activeConnections.get(sessionId);
-    const delay = (session?.config?.botAccount?.replyDelay || 3) * 1000;
-    setTimeout(() => processReplyQueue(sessionId), delay);
+  } catch (e) {
+    console.error(`[${sessionId.slice(0,8)}] ❌ Alternate endpoint error:`, e.message);
   }
 }
 
@@ -335,6 +416,8 @@ async function handleChatMessage(data, sessionId) {
     console.log(`[${sessionId.slice(0,8)}]    🤖 (${msgObj.replyType}): ${msgObj.reply}`);
     // Post to TikTok chat only if chat reply feature is enabled
     if (features.chatReplyEnabled === true) {
+      const botCfg = cfg.botAccount;
+      console.log(`[${sessionId.slice(0,8)}] 🔍 Bot check — enabled:${botCfg?.enabled} hasSession:${!!botCfg?.sessionId} roomId:${session?.roomId}`);
       await replyToTikTokChat(sessionId, message, msgObj.reply);
     }
   }
