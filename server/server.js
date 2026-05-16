@@ -385,6 +385,17 @@ async function handleChatMessage(data, sessionId) {
   }
   io.to(sessionId).emit('stats', session.stats);
 
+  // ✅ Always emit tts event regardless of overlay toggle
+  // Settings page listens for this to speak replies
+  if (msgObj.reply && features.voiceEnabled) {
+    io.to(sessionId).emit('tts', {
+      reply: msgObj.reply,
+      speechReply: msgObj.speechReply || null,
+      replyType: msgObj.replyType,
+      username: msgObj.username
+    });
+  }
+
   console.log(`[${sessionId.slice(0,8)}] 💬 @${username}: ${message}`);
   if (msgObj.reply) {
     console.log(`[${sessionId.slice(0,8)}]    🤖 (${msgObj.replyType}): ${msgObj.reply}`);
@@ -655,6 +666,59 @@ app.get('/api/stats/:sessionId', (req, res) => {
 // Overlay page (per user)
 app.get('/overlay/:sessionId', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'overlay.html'));
+});
+
+// Test bot reply — call this from browser to see exactly what TikTok returns
+app.post('/api/test-bot-reply', async (req, res) => {
+  const { sessionId, message } = req.body;
+  if (!sessionId) return res.json({ error: 'sessionId required' });
+
+  const session = activeConnections.get(sessionId);
+  if (!session) return res.json({ error: 'No active session — click Start Bot first' });
+
+  const botCfg = session?.config?.botAccount;
+  if (!botCfg?.sessionId) return res.json({ error: 'No bot account configured' });
+
+  const roomId = session?.roomId;
+  if (!roomId) return res.json({ error: 'No roomId — are you live?', sessionConfig: JSON.stringify(Object.keys(session)) });
+
+  const testText = message || 'StreamBuddy bot is connected! 🤖';
+  const cookieStr = `sessionid=${botCfg.sessionId}; tt-target-idc=${botCfg.ttTargetIdc || 'useast2a'}`;
+
+  try {
+    const r = await fetch('https://webcast.tiktok.com/webcast/room/chat/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Cookie': cookieStr,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': `https://www.tiktok.com/@${session?.tiktokUsername}/live`,
+        'Origin': 'https://www.tiktok.com',
+        'Accept': 'application/json'
+      },
+      body: new URLSearchParams({
+        room_id: roomId,
+        content: testText,
+        type: '1',
+        aid: '1988',
+        app_name: 'tiktok_web',
+        device_platform: 'web_pc'
+      })
+    });
+    const raw = await r.text();
+    let parsed = {};
+    try { parsed = JSON.parse(raw); } catch {}
+    res.json({
+      httpStatus: r.status,
+      tiktokStatus: parsed.status_code,
+      message: parsed.message || parsed.status_msg || raw.substring(0, 300),
+      roomId,
+      botUsername: botCfg.username,
+      hasTtTargetIdc: !!botCfg.ttTargetIdc
+    });
+  } catch (err) {
+    res.json({ error: err.message });
+  }
 });
 
 // Get user settings — called by settings page on load
