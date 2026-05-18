@@ -782,18 +782,17 @@ app.get('/api/wl-config/:sessionId', (req, res) => {
 
 // Win/Loss stats — update from extension popup
 app.post('/api/wl-stats', (req, res) => {
-  const { sessionId, wins, losses } = req.body;
+  const { sessionId, wins, losses, games } = req.body;
   if (!sessionId) return res.json({ success: false });
+  const statsData = { games: games || 0, wins: wins || 0, losses: losses || 0 };
   const session = activeConnections.get(sessionId);
   if (!session) {
-    // Store even if not connected — will be read by overlay
     if (!global.wlStats) global.wlStats = {};
-    global.wlStats[sessionId] = { wins: wins || 0, losses: losses || 0 };
+    global.wlStats[sessionId] = statsData;
   } else {
-    session.wlStats = { wins: wins || 0, losses: losses || 0 };
+    session.wlStats = statsData;
   }
-  // Broadcast to overlay via socket
-  io.to(sessionId).emit('wl-update', { wins: wins || 0, losses: losses || 0 });
+  io.to(sessionId).emit('wl-update', statsData);
   res.json({ success: true });
 });
 
