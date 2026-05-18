@@ -409,6 +409,54 @@ async function handleChatMessage(data, sessionId) {
   }
 
   console.log(`[${sessionId.slice(0,8)}] 💬 @${username}: ${message}`);
+
+  // ✅ W/L keyword detection — only from streamer or moderators
+  const wlConfig = diskConfig.wl || {};
+  if (wlConfig.keywordsEnabled) {
+    const isOwner = username.toLowerCase() === session.tiktokUsername?.toLowerCase();
+    const isMod = data.isModerator === true;
+    if (isOwner || isMod) {
+      const msgLower = message.trim().toLowerCase();
+      const winKw = (wlConfig.winKeyword || '').toLowerCase().trim();
+      const lossKw = (wlConfig.lossKeyword || '').toLowerCase().trim();
+      const gameKw = (wlConfig.gameKeyword || '').toLowerCase().trim();
+
+      const isWin  = winKw  && msgLower === winKw;
+      const isLoss = lossKw && msgLower === lossKw;
+      const isGame = gameKw && msgLower === gameKw;
+
+      if (isWin || isLoss || isGame) {
+        // Cooldown check — prevent multiple mods triggering at same time
+        const cooldownMs = (wlConfig.keywordCooldown || 3) * 60 * 1000;
+        const now = Date.now();
+        const lastTrigger = session.wlLastTrigger || 0;
+
+        if (now - lastTrigger < cooldownMs) {
+          const remaining = Math.ceil((cooldownMs - (now - lastTrigger)) / 1000);
+          console.log(`[${sessionId.slice(0,8)}] ⏱️ W/L keyword cooldown — ${remaining}s remaining`);
+        } else {
+          session.wlLastTrigger = now;
+          if (!session.wlStats) session.wlStats = { games: 0, wins: 0, losses: 0 };
+
+          if (isWin) {
+            session.wlStats.wins++;
+            session.wlStats.games++; // ✅ auto-increment games
+            console.log(`[${sessionId.slice(0,8)}] 🏆 WIN by @${username} — wins=${session.wlStats.wins} games=${session.wlStats.games}`);
+          } else if (isLoss) {
+            session.wlStats.losses++;
+            session.wlStats.games++; // ✅ auto-increment games
+            console.log(`[${sessionId.slice(0,8)}] 💀 LOSS by @${username} — losses=${session.wlStats.losses} games=${session.wlStats.games}`);
+          } else if (isGame) {
+            session.wlStats.games++;
+            console.log(`[${sessionId.slice(0,8)}] 🎮 GAME by @${username} — games=${session.wlStats.games}`);
+          }
+
+          io.to(sessionId).emit('wl-update', session.wlStats);
+        }
+      }
+    }
+  }
+
   if (msgObj.reply) {
     console.log(`[${sessionId.slice(0,8)}]    🤖 (${msgObj.replyType}): ${msgObj.reply}`);
     console.log(`[${sessionId.slice(0,8)}] 🔍 chatReply=${features.chatReplyEnabled} bot.enabled=${botAccount.enabled} hasSession=${!!botAccount.sessionId} roomId=${session?.roomId}`);
