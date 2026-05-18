@@ -741,6 +741,35 @@ app.post('/api/test-bot-reply', async (req, res) => {
   }
 });
 
+// View raw keywords for a session (for recovery)
+app.get('/api/keywords/:sessionId', (req, res) => {
+  users = readDB('users');
+  licenses = readDB('licenses');
+  const user = users[req.params.sessionId];
+  if (!user) return res.json({ error: 'Session not found' });
+  const lic = licenses[user.licenseKey];
+  res.json({ quickReplies: lic?.config?.quickReplies || [] });
+});
+
+// Restore keywords without touching other settings
+app.post('/api/keywords', (req, res) => {
+  const { sessionId, quickReplies } = req.body;
+  if (!sessionId || !Array.isArray(quickReplies)) return res.json({ success: false });
+  users = readDB('users');
+  licenses = readDB('licenses');
+  const user = users[sessionId];
+  if (!user) return res.json({ success: false });
+  const licKey = user.licenseKey;
+  if (!licenses[licKey]) return res.json({ success: false });
+  if (!licenses[licKey].config) licenses[licKey].config = {};
+  licenses[licKey].config.quickReplies = quickReplies;
+  writeDB('licenses', licenses);
+  const session = activeConnections.get(sessionId);
+  if (session?.config) session.config.quickReplies = quickReplies;
+  console.log(`[${sessionId.slice(0,8)}] 📝 Keywords restored: ${quickReplies.length} entries`);
+  res.json({ success: true, count: quickReplies.length });
+});
+
 // Win/Loss config for overlay styling
 app.get('/api/wl-config/:sessionId', (req, res) => {
   users = readDB('users');
