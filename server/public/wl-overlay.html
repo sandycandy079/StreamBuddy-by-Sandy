@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Win/Loss Overlay</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: transparent !important; overflow: hidden; width: 1080px; height: 1920px; }
+
+  .wl-card {
+    position: absolute;
+    opacity: 0;
+    transform: scale(0.85);
+    transition: opacity 0.5s ease, transform 0.5s cubic-bezier(0.34,1.56,0.64,1);
+    pointer-events: none;
+  }
+  .wl-card.show { opacity: 1; transform: scale(1); }
+
+  /* === POSITIONS === */
+  .pos-top-right    { top: 40px; right: 40px; }
+  .pos-top-left     { top: 40px; left: 40px; }
+  .pos-bottom-right { bottom: 160px; right: 40px; }
+  .pos-bottom-left  { bottom: 160px; left: 40px; }
+  .pos-top-center   { top: 40px; left: 50%; transform: translateX(-50%); }
+  .pos-top-center.show { transform: translateX(-50%) scale(1); }
+  .pos-bottom-center { bottom: 160px; left: 50%; transform: translateX(-50%); }
+  .pos-bottom-center.show { transform: translateX(-50%) scale(1); }
+
+  /* === SHARED CARD STRUCTURE === */
+  .wl-inner { padding: 14px 20px; border-radius: 16px; min-width: 160px; }
+  .wl-title-text { text-align: center; margin-bottom: 10px; letter-spacing: 0.08em; font-weight: 700; }
+  .wl-row { display: flex; align-items: center; justify-content: center; gap: 12px; }
+  .wl-stat { text-align: center; }
+  .wl-num { font-variant-numeric: tabular-nums; line-height: 1; transition: transform 0.3s cubic-bezier(0.34,1.56,0.64,1); display: block; }
+  .wl-num.pop { animation: pop 0.35s cubic-bezier(0.34,1.56,0.64,1); }
+  .wl-lbl { letter-spacing: 0.1em; font-weight: 700; margin-top: 3px; display: block; }
+  .wl-sep { font-weight: 300; opacity: 0.35; }
+
+  /* === NEON TEMPLATE === */
+  .tpl-neon .wl-inner {
+    background: rgba(5,5,20,0.88);
+    border: 1px solid rgba(37,244,238,0.2);
+    box-shadow: 0 0 30px rgba(0,0,0,0.6), inset 0 0 60px rgba(37,244,238,0.03);
+    backdrop-filter: blur(14px);
+  }
+  .tpl-neon .wl-title-text { color: rgba(255,255,255,0.4); font-size: 11px; text-transform: uppercase; }
+  .tpl-neon .wl-sep { font-size: 28px; color: rgba(255,255,255,0.15); }
+
+  /* === FOREST TEMPLATE === */
+  .tpl-forest .wl-inner {
+    background: linear-gradient(135deg, rgba(15,30,15,0.92) 0%, rgba(8,18,8,0.92) 100%);
+    border: 1px solid rgba(76,175,80,0.3);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5), inset 0 1px 0 rgba(129,199,132,0.1);
+    backdrop-filter: blur(12px);
+  }
+  .tpl-forest .wl-title-text { color: rgba(129,199,132,0.6); font-size: 11px; text-transform: uppercase; font-family: Georgia, serif; }
+  .tpl-forest .wl-sep { font-size: 28px; color: rgba(129,199,132,0.2); }
+  .tpl-forest .wl-lbl { font-family: Georgia, serif; }
+
+  /* === PAPER TEMPLATE === */
+  .tpl-paper .wl-inner {
+    background: rgba(245,240,232,0.95);
+    border: 2px solid #c8b99a;
+    box-shadow: 3px 3px 0 rgba(0,0,0,0.15), 0 8px 24px rgba(0,0,0,0.3);
+    backdrop-filter: none;
+  }
+  .tpl-paper .wl-title-text { color: #6d5843; font-size: 11px; text-transform: uppercase; font-family: Georgia, serif; letter-spacing: 0.15em; }
+  .tpl-paper .wl-num { font-family: Georgia, serif; }
+  .tpl-paper .wl-lbl { font-family: Georgia, serif; }
+  .tpl-paper .wl-sep { font-size: 28px; color: #8d6e63; opacity: 0.5; font-family: Georgia, serif; }
+
+  /* === MINIMAL TEMPLATE === */
+  .tpl-minimal .wl-inner {
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.12);
+    backdrop-filter: blur(6px);
+  }
+  .tpl-minimal .wl-title-text { color: rgba(255,255,255,0.3); font-size: 10px; text-transform: uppercase; }
+  .tpl-minimal .wl-sep { font-size: 24px; }
+  .tpl-minimal .wl-lbl { opacity: 0.5; }
+
+  @keyframes pop { 0%{transform:scale(1)} 50%{transform:scale(1.25)} 100%{transform:scale(1)} }
+</style>
+</head>
+<body>
+<div class="wl-card pos-top-right" id="wlCard">
+  <div class="wl-inner" id="wlInner">
+    <div class="wl-title-text" id="wlTitleEl">🎮 Stats</div>
+    <div class="wl-row">
+      <div class="wl-stat">
+        <span class="wl-num" id="wlWins">0</span>
+        <span class="wl-lbl" id="wlWinLbl">WINS</span>
+      </div>
+      <div class="wl-sep" id="wlSepEl">—</div>
+      <div class="wl-stat">
+        <span class="wl-num" id="wlLosses">0</span>
+        <span class="wl-lbl" id="wlLossLbl">LOSSES</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const SERVER_URL = 'https://streambuddy-by-sandy-production.up.railway.app';
+const SESSION_ID = new URLSearchParams(window.location.search).get('session') ||
+  window.location.pathname.split('/').pop();
+
+let cfg = {};
+let wins = 0, losses = 0;
+
+async function loadConfig() {
+  try {
+    const res = await fetch(`${SERVER_URL}/api/wl-config/${SESSION_ID}`);
+    cfg = await res.json();
+    applyConfig(cfg);
+  } catch {}
+}
+
+function applyConfig(c) {
+  if (!c || !Object.keys(c).length) c = {};
+  const card = document.getElementById('wlCard');
+  const inner = document.getElementById('wlInner');
+  const winsEl = document.getElementById('wlWins');
+  const lossesEl = document.getElementById('wlLosses');
+
+  // Template
+  const tpl = c.template || 'neon';
+  card.className = `wl-card tpl-${tpl} pos-${(c.position||'top-right').replace(' ','-')}`;
+  if (card.classList.contains('show')) card.classList.add('show');
+
+  // Position
+  const pos = (c.position || 'top-right').replace(' ','-');
+  card.classList.add(`pos-${pos}`);
+
+  // Inner style
+  inner.style.borderRadius = (c.radius ?? 16) + 'px';
+  if (c.bgOpacity !== undefined && tpl !== 'paper' && tpl !== 'minimal') {
+    // Adjust bg opacity per template
+    const op = c.bgOpacity ?? 0.8;
+    if (tpl === 'neon') inner.style.background = `rgba(5,5,20,${op})`;
+    if (tpl === 'forest') inner.style.background = `linear-gradient(135deg,rgba(15,30,15,${op}) 0%,rgba(8,18,8,${op}) 100%)`;
+  }
+
+  // Font
+  const font = c.font || "'Segoe UI', sans-serif";
+  inner.style.fontFamily = font;
+
+  // Sizes
+  winsEl.style.fontSize = (c.numSize || 48) + 'px';
+  lossesEl.style.fontSize = (c.numSize || 48) + 'px';
+  document.getElementById('wlWinLbl').style.fontSize = (c.labelSize || 11) + 'px';
+  document.getElementById('wlLossLbl').style.fontSize = (c.labelSize || 11) + 'px';
+  document.getElementById('wlSepEl').style.fontSize = Math.round((c.numSize||48) * 0.6) + 'px';
+
+  // Colors
+  winsEl.style.color = c.winColor || '#00e676';
+  if (tpl === 'neon') winsEl.style.textShadow = `0 0 16px ${c.winColor||'#00e676'}80`;
+  lossesEl.style.color = c.lossColor || '#fe2c55';
+  if (tpl === 'neon') lossesEl.style.textShadow = `0 0 16px ${c.lossColor||'#fe2c55'}80`;
+
+  // Labels & texts
+  document.getElementById('wlTitleEl').textContent = c.title || '🎮 Stats';
+  document.getElementById('wlWinLbl').textContent = c.winLabel || 'WINS';
+  document.getElementById('wlLossLbl').textContent = c.lossLabel || 'LOSSES';
+  document.getElementById('wlSepEl').textContent = c.separator || '—';
+
+  // Label colors
+  document.getElementById('wlWinLbl').style.color = c.winColor || '#00e676';
+  document.getElementById('wlLossLbl').style.color = c.lossColor || '#fe2c55';
+}
+
+function setStats(w, l, animate) {
+  const wEl = document.getElementById('wlWins');
+  const lEl = document.getElementById('wlLosses');
+  if (animate && w !== wins) { wEl.classList.remove('pop'); void wEl.offsetWidth; wEl.classList.add('pop'); }
+  if (animate && l !== losses) { lEl.classList.remove('pop'); void lEl.offsetWidth; lEl.classList.add('pop'); }
+  wins = w; losses = l;
+  wEl.textContent = wins;
+  lEl.textContent = losses;
+}
+
+async function init() {
+  await loadConfig();
+  try {
+    const res = await fetch(`${SERVER_URL}/api/wl-stats/${SESSION_ID}`);
+    const data = await res.json();
+    setStats(data.wins || 0, data.losses || 0, false);
+  } catch {}
+  document.getElementById('wlCard').classList.add('show');
+  setInterval(loadConfig, 30000); // refresh config every 30s
+}
+
+init();
+
+function initSocket() {
+  const socket = io(SERVER_URL);
+  socket.on('connect', () => socket.emit('join', SESSION_ID));
+  socket.on('wl-update', data => setStats(data.wins||0, data.losses||0, true));
+  socket.on('wl-config', data => { cfg = data; applyConfig(cfg); });
+}
+
+(function loadSocketIO() {
+  const s = document.createElement('script');
+  s.src = SERVER_URL + '/socket.io/socket.io.js';
+  s.onload = initSocket;
+  s.onerror = () => {
+    const fb = document.createElement('script');
+    fb.src = 'https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js';
+    fb.onload = initSocket;
+    document.head.appendChild(fb);
+  };
+  document.head.appendChild(s);
+})();
+</script>
+</body>
+</html>
