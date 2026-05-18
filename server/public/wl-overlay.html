@@ -4,213 +4,178 @@
 <meta charset="UTF-8">
 <title>Win/Loss Overlay</title>
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { background: transparent !important; overflow: hidden; width: 1080px; height: 1920px; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: transparent !important; overflow: hidden; width: 1080px; height: 1920px; font-family: 'Segoe UI', Arial, sans-serif; }
 
-  .wl-card {
-    position: absolute;
-    opacity: 0;
-    transform: scale(0.85);
-    transition: opacity 0.5s ease, transform 0.5s cubic-bezier(0.34,1.56,0.64,1);
-    pointer-events: none;
-  }
-  .wl-card.show { opacity: 1; transform: scale(1); }
+.wl-wrap { position: absolute; opacity: 0; transition: opacity 0.6s ease; }
+.wl-wrap.show { opacity: 1; }
 
-  /* === POSITIONS === */
-  .pos-top-right    { top: 40px; right: 40px; }
-  .pos-top-left     { top: 40px; left: 40px; }
-  .pos-bottom-right { bottom: 160px; right: 40px; }
-  .pos-bottom-left  { bottom: 160px; left: 40px; }
-  .pos-top-center   { top: 40px; left: 50%; transform: translateX(-50%); }
-  .pos-top-center.show { transform: translateX(-50%) scale(1); }
-  .pos-bottom-center { bottom: 160px; left: 50%; transform: translateX(-50%); }
-  .pos-bottom-center.show { transform: translateX(-50%) scale(1); }
+.pos-top-left      { top: 60px; left: 60px; }
+.pos-top-right     { top: 60px; right: 60px; }
+.pos-top-center    { top: 60px; left: 50%; transform: translateX(-50%); }
+.pos-bottom-left   { bottom: 180px; left: 60px; }
+.pos-bottom-right  { bottom: 180px; right: 60px; }
+.pos-bottom-center { bottom: 180px; left: 50%; transform: translateX(-50%); }
 
-  /* === SHARED CARD STRUCTURE === */
-  .wl-inner { padding: 14px 20px; border-radius: 16px; min-width: 160px; }
-  .wl-title-text { text-align: center; margin-bottom: 10px; letter-spacing: 0.08em; font-weight: 700; }
-  .wl-row { display: flex; align-items: center; justify-content: center; gap: 12px; }
-  .wl-stat { text-align: center; }
-  .wl-num { font-variant-numeric: tabular-nums; line-height: 1; transition: transform 0.3s cubic-bezier(0.34,1.56,0.64,1); display: block; }
-  .wl-num.pop { animation: pop 0.35s cubic-bezier(0.34,1.56,0.64,1); }
-  .wl-lbl { letter-spacing: 0.1em; font-weight: 700; margin-top: 3px; display: block; }
-  .wl-sep { font-weight: 300; opacity: 0.35; }
+.cards-row { display: flex; gap: 20px; align-items: flex-start; }
+.cards-row.layout-center  { justify-content: center; }
+.cards-row.layout-left    { justify-content: flex-start; }
+.cards-row.layout-spread  { justify-content: space-between; min-width: 520px; }
 
-  /* === NEON TEMPLATE === */
-  .tpl-neon .wl-inner {
-    background: rgba(5,5,20,0.88);
-    border: 1px solid rgba(37,244,238,0.2);
-    box-shadow: 0 0 30px rgba(0,0,0,0.6), inset 0 0 60px rgba(37,244,238,0.03);
-    backdrop-filter: blur(14px);
-  }
-  .tpl-neon .wl-title-text { color: rgba(255,255,255,0.4); font-size: 11px; text-transform: uppercase; }
-  .tpl-neon .wl-sep { font-size: 28px; color: rgba(255,255,255,0.15); }
+.stat-card {
+  position: relative; display: flex; flex-direction: column; align-items: center;
+  opacity: 0; transform: translateY(20px) scale(0.9);
+  transition: opacity 0.5s ease, transform 0.5s cubic-bezier(0.34,1.56,0.64,1);
+}
+.stat-card.visible { opacity: 1; transform: translateY(0) scale(1); }
+.stat-card:nth-child(1) { transition-delay: 0.05s; }
+.stat-card:nth-child(2) { transition-delay: 0.15s; }
+.stat-card:nth-child(3) { transition-delay: 0.25s; }
 
-  /* === FOREST TEMPLATE === */
-  .tpl-forest .wl-inner {
-    background: linear-gradient(135deg, rgba(15,30,15,0.92) 0%, rgba(8,18,8,0.92) 100%);
-    border: 1px solid rgba(76,175,80,0.3);
-    box-shadow: 0 8px 32px rgba(0,0,0,0.5), inset 0 1px 0 rgba(129,199,132,0.1);
-    backdrop-filter: blur(12px);
-  }
-  .tpl-forest .wl-title-text { color: rgba(129,199,132,0.6); font-size: 11px; text-transform: uppercase; font-family: Georgia, serif; }
-  .tpl-forest .wl-sep { font-size: 28px; color: rgba(129,199,132,0.2); }
-  .tpl-forest .wl-lbl { font-family: Georgia, serif; }
+.icon-box {
+  width: 110px; height: 110px; border-radius: 22px; background: #1a1a3a;
+  display: flex; align-items: center; justify-content: center; position: relative;
+}
+.icon-box svg { width: 52px; height: 52px; }
 
-  /* === PAPER TEMPLATE === */
-  .tpl-paper .wl-inner {
-    background: rgba(245,240,232,0.95);
-    border: 2px solid #c8b99a;
-    box-shadow: 3px 3px 0 rgba(0,0,0,0.15), 0 8px 24px rgba(0,0,0,0.3);
-    backdrop-filter: none;
-  }
-  .tpl-paper .wl-title-text { color: #6d5843; font-size: 11px; text-transform: uppercase; font-family: Georgia, serif; letter-spacing: 0.15em; }
-  .tpl-paper .wl-num { font-family: Georgia, serif; }
-  .tpl-paper .wl-lbl { font-family: Georgia, serif; }
-  .tpl-paper .wl-sep { font-size: 28px; color: #8d6e63; opacity: 0.5; font-family: Georgia, serif; }
+.card-games  .icon-box { border: 2.5px solid #f5c842; box-shadow: 0 0 18px #f5c84260, 0 0 40px #f5c84230, inset 0 0 20px #f5c84210; }
+.card-wins   .icon-box { border: 2.5px solid #e040fb; box-shadow: 0 0 18px #e040fb60, 0 0 40px #e040fb30, inset 0 0 20px #e040fb10; }
+.card-losses .icon-box { border: 2.5px solid #00e5ff; box-shadow: 0 0 18px #00e5ff60, 0 0 40px #00e5ff30, inset 0 0 20px #00e5ff10; }
 
-  /* === MINIMAL TEMPLATE === */
-  .tpl-minimal .wl-inner {
-    background: transparent;
-    border: 1px solid rgba(255,255,255,0.12);
-    backdrop-filter: blur(6px);
-  }
-  .tpl-minimal .wl-title-text { color: rgba(255,255,255,0.3); font-size: 10px; text-transform: uppercase; }
-  .tpl-minimal .wl-sep { font-size: 24px; }
-  .tpl-minimal .wl-lbl { opacity: 0.5; }
+.badge {
+  position: absolute; top: -14px; right: -14px; min-width: 36px; height: 36px;
+  border-radius: 50%; background: #1a1a3a; border: 2.5px solid currentColor;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px; font-weight: 800; padding: 0 4px; z-index: 10;
+}
+.badge.pop { animation: badgePop 0.4s cubic-bezier(0.34,1.56,0.64,1); }
+.card-games  .badge { color: #f5c842; box-shadow: 0 0 10px #f5c84280; }
+.card-wins   .badge { color: #e040fb; box-shadow: 0 0 10px #e040fb80; }
+.card-losses .badge { color: #00e5ff; box-shadow: 0 0 10px #00e5ff80; }
 
-  @keyframes pop { 0%{transform:scale(1)} 50%{transform:scale(1.25)} 100%{transform:scale(1)} }
+.label-pill {
+  margin-top: 10px; padding: 5px 16px; border-radius: 20px;
+  font-size: 15px; font-weight: 700; letter-spacing: 0.04em;
+  background: #1a1a3a; white-space: nowrap;
+}
+.card-games  .label-pill { color: #f5c842; border: 1.5px solid #f5c84250; }
+.card-wins   .label-pill { color: #e040fb; border: 1.5px solid #e040fb50; }
+.card-losses .label-pill { color: #00e5ff; border: 1.5px solid #00e5ff50; }
+
+.icon-games  { fill: #8a7fd4; }
+.icon-wins   { fill: #b07fd4; }
+.icon-losses { fill: #7fd4d4; }
+
+@keyframes badgePop {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.5); }
+  70% { transform: scale(0.85); }
+  100% { transform: scale(1); }
+}
 </style>
 </head>
 <body>
-<div class="wl-card pos-top-right" id="wlCard">
-  <div class="wl-inner" id="wlInner">
-    <div class="wl-title-text" id="wlTitleEl">🎮 Stats</div>
-    <div class="wl-row">
-      <div class="wl-stat">
-        <span class="wl-num" id="wlWins">0</span>
-        <span class="wl-lbl" id="wlWinLbl">WINS</span>
+<div class="wl-wrap pos-top-right" id="wlWrap">
+  <div class="cards-row layout-center" id="cardsRow">
+
+    <div class="stat-card card-games" id="cardGames">
+      <div class="icon-box">
+        <svg viewBox="0 0 24 24" class="icon-games"><path d="M21 6H3c-1.1 0-2 .9-2 2v8c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-10 7H8v3H6v-3H3v-2h3V8h2v3h3v2zm4.5 2c-.83 0-1.5-.67-1.5-1.5S14.67 13 15.5 13s1.5.67 1.5 1.5S16.33 15 15.5 15zm3-3c-.83 0-1.5-.67-1.5-1.5S17.67 10 18.5 10s1.5.67 1.5 1.5S19.33 12 18.5 12z"/></svg>
+        <div class="badge" id="badgeGames">0</div>
       </div>
-      <div class="wl-sep" id="wlSepEl">—</div>
-      <div class="wl-stat">
-        <span class="wl-num" id="wlLosses">0</span>
-        <span class="wl-lbl" id="wlLossLbl">LOSSES</span>
-      </div>
+      <div class="label-pill" id="lblGames">Games</div>
     </div>
+
+    <div class="stat-card card-wins" id="cardWins">
+      <div class="icon-box">
+        <svg viewBox="0 0 24 24" class="icon-wins"><path d="M5 16L3 5l5.5 5L12 4l3.5 6L21 5l-2 11H5zm14 3c0 .6-.4 1-1 1H6c-.6 0-1-.4-1-1v-1h14v1z"/></svg>
+        <div class="badge" id="badgeWins">0</div>
+      </div>
+      <div class="label-pill" id="lblWins">Wins</div>
+    </div>
+
+    <div class="stat-card card-losses" id="cardLosses">
+      <div class="icon-box">
+        <svg viewBox="0 0 24 24" class="icon-losses"><path d="M12 2C8.13 2 5 5.13 5 9v10l3-3 2 2 2-2 2 2 2-2 3 3V9c0-3.87-3.13-7-7-7zm-3.5 8c-.83 0-1.5-.67-1.5-1.5S7.67 7 8.5 7 10 7.67 10 8.5 9.33 10 8.5 10zm7 0c-.83 0-1.5-.67-1.5-1.5S14.67 7 15.5 7 17 7.67 17 8.5 16.33 10 15.5 10z"/></svg>
+        <div class="badge" id="badgeLosses">0</div>
+      </div>
+      <div class="label-pill" id="lblLosses">Kills</div>
+    </div>
+
   </div>
 </div>
-
 <script>
-const SERVER_URL = 'https://streambuddy-by-sandy-production.up.railway.app';
-const SESSION_ID = new URLSearchParams(window.location.search).get('session') ||
-  window.location.pathname.split('/').pop();
+const SERVER_URL='https://streambuddy-by-sandy-production.up.railway.app';
+const SESSION_ID=new URLSearchParams(window.location.search).get('session')||window.location.pathname.split('/').pop();
+let stats={games:0,wins:0,losses:0};
 
-let cfg = {};
-let wins = 0, losses = 0;
-
-async function loadConfig() {
-  try {
-    const res = await fetch(`${SERVER_URL}/api/wl-config/${SESSION_ID}`);
-    cfg = await res.json();
-    applyConfig(cfg);
-  } catch {}
-}
-
-function applyConfig(c) {
-  if (!c || !Object.keys(c).length) c = {};
-  const card = document.getElementById('wlCard');
-  const inner = document.getElementById('wlInner');
-  const winsEl = document.getElementById('wlWins');
-  const lossesEl = document.getElementById('wlLosses');
-
-  // Template
-  const tpl = c.template || 'neon';
-  card.className = `wl-card tpl-${tpl} pos-${(c.position||'top-right').replace(' ','-')}`;
-  if (card.classList.contains('show')) card.classList.add('show');
-
-  // Position
-  const pos = (c.position || 'top-right').replace(' ','-');
-  card.classList.add(`pos-${pos}`);
-
-  // Inner style
-  inner.style.borderRadius = (c.radius ?? 16) + 'px';
-  if (c.bgOpacity !== undefined && tpl !== 'paper' && tpl !== 'minimal') {
-    // Adjust bg opacity per template
-    const op = c.bgOpacity ?? 0.8;
-    if (tpl === 'neon') inner.style.background = `rgba(5,5,20,${op})`;
-    if (tpl === 'forest') inner.style.background = `linear-gradient(135deg,rgba(15,30,15,${op}) 0%,rgba(8,18,8,${op}) 100%)`;
-  }
-
-  // Font
-  const font = c.font || "'Segoe UI', sans-serif";
-  inner.style.fontFamily = font;
-
-  // Sizes
-  winsEl.style.fontSize = (c.numSize || 48) + 'px';
-  lossesEl.style.fontSize = (c.numSize || 48) + 'px';
-  document.getElementById('wlWinLbl').style.fontSize = (c.labelSize || 11) + 'px';
-  document.getElementById('wlLossLbl').style.fontSize = (c.labelSize || 11) + 'px';
-  document.getElementById('wlSepEl').style.fontSize = Math.round((c.numSize||48) * 0.6) + 'px';
-
-  // Colors
-  winsEl.style.color = c.winColor || '#00e676';
-  if (tpl === 'neon') winsEl.style.textShadow = `0 0 16px ${c.winColor||'#00e676'}80`;
-  lossesEl.style.color = c.lossColor || '#fe2c55';
-  if (tpl === 'neon') lossesEl.style.textShadow = `0 0 16px ${c.lossColor||'#fe2c55'}80`;
-
-  // Labels & texts
-  document.getElementById('wlTitleEl').textContent = c.title || '🎮 Stats';
-  document.getElementById('wlWinLbl').textContent = c.winLabel || 'WINS';
-  document.getElementById('wlLossLbl').textContent = c.lossLabel || 'LOSSES';
-  document.getElementById('wlSepEl').textContent = c.separator || '—';
-
-  // Label colors
-  document.getElementById('wlWinLbl').style.color = c.winColor || '#00e676';
-  document.getElementById('wlLossLbl').style.color = c.lossColor || '#fe2c55';
-}
-
-function setStats(w, l, animate) {
-  const wEl = document.getElementById('wlWins');
-  const lEl = document.getElementById('wlLosses');
-  if (animate && w !== wins) { wEl.classList.remove('pop'); void wEl.offsetWidth; wEl.classList.add('pop'); }
-  if (animate && l !== losses) { lEl.classList.remove('pop'); void lEl.offsetWidth; lEl.classList.add('pop'); }
-  wins = w; losses = l;
-  wEl.textContent = wins;
-  lEl.textContent = losses;
-}
-
-async function init() {
-  await loadConfig();
-  try {
-    const res = await fetch(`${SERVER_URL}/api/wl-stats/${SESSION_ID}`);
-    const data = await res.json();
-    setStats(data.wins || 0, data.losses || 0, false);
-  } catch {}
-  document.getElementById('wlCard').classList.add('show');
-  setInterval(loadConfig, 30000); // refresh config every 30s
-}
-
-init();
-
-function initSocket() {
-  const socket = io(SERVER_URL);
-  socket.on('connect', () => socket.emit('join', SESSION_ID));
-  socket.on('wl-update', data => setStats(data.wins||0, data.losses||0, true));
-  socket.on('wl-config', data => { cfg = data; applyConfig(cfg); });
-}
-
-(function loadSocketIO() {
-  const s = document.createElement('script');
-  s.src = SERVER_URL + '/socket.io/socket.io.js';
-  s.onload = initSocket;
-  s.onerror = () => {
-    const fb = document.createElement('script');
-    fb.src = 'https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js';
-    fb.onload = initSocket;
-    document.head.appendChild(fb);
+function applyConfig(c){
+  if(!c||!Object.keys(c).length)return;
+  const wrap=document.getElementById('wlWrap');
+  const pos=(c.position||'top-right').replace(' ','-');
+  const shown=wrap.classList.contains('show');
+  wrap.className='wl-wrap pos-'+pos;
+  if(shown)wrap.classList.add('show');
+  document.getElementById('cardsRow').className='cards-row layout-'+(c.layout||'center');
+  const gCard=document.getElementById('cardGames');
+  gCard.style.display=c.showGames===false?'none':'flex';
+  if(c.gamesLabel)document.getElementById('lblGames').textContent=c.gamesLabel;
+  if(c.winsLabel)document.getElementById('lblWins').textContent=c.winsLabel;
+  if(c.lossesLabel)document.getElementById('lblLosses').textContent=c.lossesLabel;
+  const applyColor=(id,col)=>{
+    const card=document.getElementById(id);if(!card||!col)return;
+    const box=card.querySelector('.icon-box');
+    const badge=card.querySelector('.badge');
+    const pill=card.querySelector('.label-pill');
+    if(box){box.style.border='2.5px solid '+col;box.style.boxShadow='0 0 18px '+col+'60,0 0 40px '+col+'30,inset 0 0 20px '+col+'10';}
+    if(badge){badge.style.color=col;badge.style.boxShadow='0 0 10px '+col+'80';badge.style.borderColor=col;}
+    if(pill){pill.style.color=col;pill.style.borderColor=col+'50';}
   };
+  applyColor('cardGames',c.gamesColor);
+  applyColor('cardWins',c.winsColor);
+  applyColor('cardLosses',c.lossesColor);
+  if(c.badgeSize)document.querySelectorAll('.badge').forEach(b=>b.style.fontSize=c.badgeSize+'px');
+  if(c.labelSize)document.querySelectorAll('.label-pill').forEach(l=>l.style.fontSize=c.labelSize+'px');
+  if(c.cardSize)document.querySelectorAll('.icon-box').forEach(b=>{b.style.width=c.cardSize+'px';b.style.height=c.cardSize+'px';});
+  if(c.gap)document.getElementById('cardsRow').style.gap=c.gap+'px';
+}
+
+function setBadge(id,nv,ov,anim){
+  const el=document.getElementById(id);if(!el)return;
+  el.textContent=nv;
+  if(anim&&nv!==ov){el.classList.remove('pop');void el.offsetWidth;el.classList.add('pop');}
+}
+
+function updateDisplay(s,anim){
+  setBadge('badgeGames',s.games??stats.games,stats.games,anim);
+  setBadge('badgeWins',s.wins??stats.wins,stats.wins,anim);
+  setBadge('badgeLosses',s.losses??stats.losses,stats.losses,anim);
+  stats={games:s.games??stats.games,wins:s.wins??stats.wins,losses:s.losses??stats.losses};
+}
+
+async function init(){
+  try{const r=await fetch(SERVER_URL+'/api/wl-config/'+SESSION_ID);applyConfig(await r.json());}catch(e){}
+  try{const r=await fetch(SERVER_URL+'/api/wl-stats/'+SESSION_ID);updateDisplay(await r.json(),false);}catch(e){}
+  const wrap=document.getElementById('wlWrap');
+  wrap._shown=true;wrap.classList.add('show');
+  setTimeout(()=>document.querySelectorAll('.stat-card').forEach(c=>c.classList.add('visible')),100);
+  setInterval(async()=>{try{const r=await fetch(SERVER_URL+'/api/wl-config/'+SESSION_ID);applyConfig(await r.json());}catch(e){}},30000);
+}
+
+function initSocket(){
+  const socket=io(SERVER_URL);
+  socket.on('connect',()=>socket.emit('join',SESSION_ID));
+  socket.on('wl-update',data=>updateDisplay(data,true));
+  socket.on('wl-config',data=>applyConfig(data));
+}
+
+(function loadIO(){
+  const s=document.createElement('script');s.src=SERVER_URL+'/socket.io/socket.io.js';
+  s.onload=initSocket;
+  s.onerror=()=>{const fb=document.createElement('script');fb.src='https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js';fb.onload=initSocket;document.head.appendChild(fb);};
   document.head.appendChild(s);
 })();
+init();
 </script>
 </body>
 </html>
