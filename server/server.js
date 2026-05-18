@@ -205,14 +205,32 @@ async function replyToTikTokChat(sessionId, message, replyText) {
   if (!session) return;
 
   const botCfg = session.config?.botAccount;
-  if (!botCfg?.enabled || !botCfg?.sessionId) {
-    console.log(`[${sessionId.slice(0,8)}] ⚠️ Bot reply skipped — bot not enabled or no session`);
+  const roomId = session?.roomId;
+
+  if (!roomId) {
+    console.log(`[${sessionId.slice(0,8)}] ⚠️ Bot reply skipped — no roomId`);
     return;
   }
 
-  // Queue replies to avoid spamming TikTok
+  // ✅ Use bot account if configured, otherwise fall back to main account
+  let replySessionId, replyTtTargetIdc, replyAccountName;
+  if (botCfg?.enabled && botCfg?.sessionId) {
+    replySessionId = botCfg.sessionId;
+    replyTtTargetIdc = botCfg.ttTargetIdc || 'useast2a';
+    replyAccountName = `@${botCfg.username || 'bot'}`;
+  } else if (session.mainSessionId) {
+    // Use main account session — streamer replies as themselves
+    replySessionId = session.mainSessionId;
+    replyTtTargetIdc = session.mainTtTargetIdc || 'useast2a';
+    replyAccountName = `@${session.tiktokUsername} (main)`;
+    console.log(`[${sessionId.slice(0,8)}] ℹ️ No bot account — using main account session`);
+  } else {
+    console.log(`[${sessionId.slice(0,8)}] ⚠️ Bot reply skipped — no session available`);
+    return;
+  }
+
   if (!replyQueue.has(sessionId)) replyQueue.set(sessionId, []);
-  replyQueue.get(sessionId).push({ message, replyText });
+  replyQueue.get(sessionId).push({ message, replyText, replySessionId, replyTtTargetIdc, replyAccountName });
   processReplyQueue(sessionId);
 }
 
@@ -222,25 +240,19 @@ async function processReplyQueue(sessionId) {
   if (!queue?.length) return;
 
   replyInProgress.add(sessionId);
-  const { message, replyText } = queue.shift();
+  const item = queue.shift();
+  const { replyText, replySessionId, replyTtTargetIdc, replyAccountName } = item;
 
   try {
     const session = activeConnections.get(sessionId);
-    const botCfg = session?.config?.botAccount;
-
-    if (!botCfg?.sessionId) {
-      console.log(`[${sessionId.slice(0,8)}] ⚠️ Bot skipped — no sessionId in botCfg`);
-      return;
-    }
-
     const roomId = session?.roomId;
     if (!roomId) {
-      console.log(`[${sessionId.slice(0,8)}] ⚠️ Bot skipped — no roomId (not live yet?)`);
+      console.log(`[${sessionId.slice(0,8)}] ⚠️ Reply skipped — no roomId`);
       return;
     }
 
-    const cookieStr = `sessionid=${botCfg.sessionId}; tt-target-idc=${botCfg.ttTargetIdc || 'useast2a'}`;
-    console.log(`[${sessionId.slice(0,8)}] 🤖 Bot posting comment to room ${roomId}...`);
+    const cookieStr = `sessionid=${replySessionId}; tt-target-idc=${replyTtTargetIdc}`;
+    console.log(`[${sessionId.slice(0,8)}] 🤖 ${replyAccountName} posting: "${replyText.substring(0, 50)}" room:${roomId}`);
 
     const res = await fetch('https://webcast.tiktok.com/webcast/room/chat/', {
       method: 'POST',
@@ -263,20 +275,20 @@ async function processReplyQueue(sessionId) {
     });
 
     const rawText = await res.text();
-    console.log(`[${sessionId.slice(0,8)}] 📡 TikTok reply ${res.status}: ${rawText.substring(0, 300)}`);
+    console.log(`[${sessionId.slice(0,8)}] 📡 TikTok ${res.status}: ${rawText.substring(0, 200)}`);
 
     let data = {};
     try { data = JSON.parse(rawText); } catch {}
 
     if (data.status_code === 0) {
-      console.log(`[${sessionId.slice(0,8)}] ✅ Bot comment posted!`);
+      console.log(`[${sessionId.slice(0,8)}] ✅ Reply posted by ${replyAccountName}!`);
     } else {
       console.log(`[${sessionId.slice(0,8)}] ⚠️ status_code=${data.status_code} trying alternate...`);
       await tryAlternateCommentEndpoint(sessionId, roomId, replyText, cookieStr, session);
     }
 
   } catch (err) {
-    console.error(`[${sessionId.slice(0,8)}] ❌ Bot reply error:`, err.message);
+    console.error(`[${sessionId.slice(0,8)}] ❌ Reply error:`, err.message);
   } finally {
     replyInProgress.delete(sessionId);
     const session = activeConnections.get(sessionId);
@@ -412,6 +424,12 @@ async function connectToTikTok(sessionId, tiktokUsername, tiktokSessionId, ttTar
   if (session.tiktokConn) {
     try { session.tiktokConn.disconnect(); } catch {}
     session.tiktokConn = null;
+  }
+
+  // ✅ Store main account session for chat replies
+  if (tiktokSessionId) {
+    session.mainSessionId = tiktokSessionId;
+    session.mainTtTargetIdc = ttTargetIdc || '';
   }
 
   console.log(`[${sessionId.slice(0,8)}] 🔗 Connecting to @${tiktokUsername}...`);
@@ -677,13 +695,15 @@ app.post('/api/test-bot-reply', async (req, res) => {
   if (!session) return res.json({ error: 'No active session — click Start Bot first' });
 
   const botCfg = session?.config?.botAccount;
-  if (!botCfg?.sessionId) return res.json({ error: 'No bot account configured' });
+  const useMain = !botCfg?.sessionId;
+  const replySessionId = botCfg?.sessionId || session?.mainSessionId;
+  const replyTtTargetIdc = botCfg?.ttTargetIdc || session?.mainTtTargetIdc || 'useast2a';
 
-  const roomId = session?.roomId;
-  if (!roomId) return res.json({ error: 'No roomId — are you live?', sessionConfig: JSON.stringify(Object.keys(session)) });
+  if (!replySessionId) return res.json({ error: 'No session available — connect bot or restart main account' });
+  if (!roomId) return res.json({ error: 'No roomId — are you live?', sessionKeys: Object.keys(session) });
 
   const testText = message || 'StreamBuddy bot is connected! 🤖';
-  const cookieStr = `sessionid=${botCfg.sessionId}; tt-target-idc=${botCfg.ttTargetIdc || 'useast2a'}`;
+  const cookieStr = `sessionid=${replySessionId}; tt-target-idc=${replyTtTargetIdc}`;
 
   try {
     const r = await fetch('https://webcast.tiktok.com/webcast/room/chat/', {
@@ -713,12 +733,52 @@ app.post('/api/test-bot-reply', async (req, res) => {
       tiktokStatus: parsed.status_code,
       message: parsed.message || parsed.status_msg || raw.substring(0, 300),
       roomId,
-      botUsername: botCfg.username,
-      hasTtTargetIdc: !!botCfg.ttTargetIdc
+      usingAccount: useMain ? `main (@${session?.tiktokUsername})` : `bot (@${botCfg?.username})`,
+      hasTtTargetIdc: !!replyTtTargetIdc
     });
   } catch (err) {
     res.json({ error: err.message });
   }
+});
+
+// Win/Loss config for overlay styling
+app.get('/api/wl-config/:sessionId', (req, res) => {
+  users = readDB('users');
+  licenses = readDB('licenses');
+  const user = users[req.params.sessionId];
+  if (!user) return res.json({});
+  const lic = licenses[user.licenseKey];
+  res.json(lic?.config?.wl || {});
+});
+
+// Win/Loss stats — update from extension popup
+app.post('/api/wl-stats', (req, res) => {
+  const { sessionId, wins, losses } = req.body;
+  if (!sessionId) return res.json({ success: false });
+  const session = activeConnections.get(sessionId);
+  if (!session) {
+    // Store even if not connected — will be read by overlay
+    if (!global.wlStats) global.wlStats = {};
+    global.wlStats[sessionId] = { wins: wins || 0, losses: losses || 0 };
+  } else {
+    session.wlStats = { wins: wins || 0, losses: losses || 0 };
+  }
+  // Broadcast to overlay via socket
+  io.to(sessionId).emit('wl-update', { wins: wins || 0, losses: losses || 0 });
+  res.json({ success: true });
+});
+
+// Win/Loss overlay page
+app.get('/wl-overlay/:sessionId', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'wl-overlay.html'));
+});
+
+// Get current WL stats (for overlay on load)
+app.get('/api/wl-stats/:sessionId', (req, res) => {
+  const session = activeConnections.get(req.params.sessionId);
+  if (session?.wlStats) return res.json(session.wlStats);
+  const stored = global.wlStats?.[req.params.sessionId];
+  res.json(stored || { wins: 0, losses: 0 });
 });
 
 // Get user settings — called by settings page on load
@@ -734,7 +794,8 @@ app.get('/api/settings/:sessionId', (req, res) => {
     quickReplies: config.quickReplies || [],
     bot: config.bot || {},
     overlayConfig: config.overlayConfig || {},
-    features: config.features || { overlayEnabled: true, chatReplyEnabled: false, voiceEnabled: false }
+    features: config.features || { overlayEnabled: true, chatReplyEnabled: false, voiceEnabled: false },
+    wl: config.wl || {}
   });
 });
 
@@ -763,7 +824,7 @@ app.post('/api/features', (req, res) => {
 
 // Save user settings (keywords, streamer info, overlay config)
 app.post('/api/settings', (req, res) => {
-  const { sessionId, streamerInfo, quickReplies, bot, overlayConfig, features } = req.body;
+  const { sessionId, streamerInfo, quickReplies, bot, overlayConfig, features, wl } = req.body;
   users = readDB('users');
   licenses = readDB('licenses');
   if (!sessionId || !users[sessionId]) return res.json({ success: false, error: 'Invalid session' });
@@ -771,7 +832,6 @@ app.post('/api/settings', (req, res) => {
   const licKey = users[sessionId].licenseKey;
   if (!licenses[licKey]) return res.json({ success: false, error: 'License not found' });
 
-  // Preserve botAccount config across settings saves
   const existingBotAccount = licenses[licKey].config?.botAccount || {};
 
   licenses[licKey].config = {
@@ -780,12 +840,16 @@ app.post('/api/settings', (req, res) => {
     bot: bot || {},
     overlayConfig: overlayConfig || {},
     features: features || { overlayEnabled: true, chatReplyEnabled: false, voiceEnabled: false },
-    botAccount: existingBotAccount // ✅ never overwrite bot credentials on settings save
+    wl: wl || {},
+    botAccount: existingBotAccount
   };
   writeDB('licenses', licenses);
 
   const session = activeConnections.get(sessionId);
   if (session) session.config = licenses[licKey].config;
+
+  // Push wl config to overlay immediately via socket
+  if (wl) io.to(sessionId).emit('wl-config', wl);
 
   res.json({ success: true });
 });
