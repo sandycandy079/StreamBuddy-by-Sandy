@@ -417,51 +417,42 @@ async function handleChatMessage(data, sessionId) {
   console.log(`[${sessionId.slice(0,8)}] 🔍 WL check: enabled=${wlConfig.keywordsEnabled} user=@${username} isMod=${data.isModerator} msg="${message}"`);
 
   if (wlConfig.keywordsEnabled === true) {
-    const isOwner = username.toLowerCase() === (session.tiktokUsername || '').toLowerCase();
-    const isMod = data.isModerator === true;
+    const msgLower = message.trim().toLowerCase();
+    const winKw  = (wlConfig.winKeyword  || '').toLowerCase().trim();
+    const lossKw = (wlConfig.lossKeyword || '').toLowerCase().trim();
+    const gameKw = (wlConfig.gameKeyword || '').toLowerCase().trim();
 
-    console.log(`[${sessionId.slice(0,8)}] 🔍 WL auth: isOwner=${isOwner} isMod=${isMod} streamOwner=@${session.tiktokUsername}`);
+    const isWin  = winKw  && msgLower === winKw;
+    const isLoss = lossKw && msgLower === lossKw;
+    const isGame = gameKw && msgLower === gameKw;
 
-    if (isOwner || isMod) {
-      const msgLower = message.trim().toLowerCase();
-      const winKw  = (wlConfig.winKeyword  || '').toLowerCase().trim();
-      const lossKw = (wlConfig.lossKeyword || '').toLowerCase().trim();
-      const gameKw = (wlConfig.gameKeyword || '').toLowerCase().trim();
+    if (isWin || isLoss || isGame) {
+      const cooldownMs = (wlConfig.keywordCooldown || 3) * 60 * 1000;
+      const now = Date.now();
+      const lastTrigger = session.wlLastTrigger || 0;
 
-      console.log(`[${sessionId.slice(0,8)}] 🔍 WL keywords: win="${winKw}" loss="${lossKw}" game="${gameKw}" msg="${msgLower}"`);
+      if (now - lastTrigger < cooldownMs) {
+        const remaining = Math.ceil((cooldownMs - (now - lastTrigger)) / 1000);
+        console.log(`[${sessionId.slice(0,8)}] ⏱️ W/L cooldown — ${remaining}s remaining`);
+      } else {
+        session.wlLastTrigger = now;
+        if (!session.wlStats) session.wlStats = { games: 0, wins: 0, losses: 0 };
 
-      const isWin  = winKw  && msgLower === winKw;
-      const isLoss = lossKw && msgLower === lossKw;
-      const isGame = gameKw && msgLower === gameKw;
-
-      if (isWin || isLoss || isGame) {
-        const cooldownMs = (wlConfig.keywordCooldown || 3) * 60 * 1000;
-        const now = Date.now();
-        const lastTrigger = session.wlLastTrigger || 0;
-
-        if (now - lastTrigger < cooldownMs) {
-          const remaining = Math.ceil((cooldownMs - (now - lastTrigger)) / 1000);
-          console.log(`[${sessionId.slice(0,8)}] ⏱️ W/L cooldown active — ${remaining}s remaining, ignoring`);
-        } else {
-          session.wlLastTrigger = now;
-          if (!session.wlStats) session.wlStats = { games: 0, wins: 0, losses: 0 };
-
-          if (isWin) {
-            session.wlStats.wins++;
-            session.wlStats.games++;
-            console.log(`[${sessionId.slice(0,8)}] 🏆 WIN! wins=${session.wlStats.wins} games=${session.wlStats.games}`);
-          } else if (isLoss) {
-            session.wlStats.losses++;
-            session.wlStats.games++;
-            console.log(`[${sessionId.slice(0,8)}] 💀 LOSS! losses=${session.wlStats.losses} games=${session.wlStats.games}`);
-          } else if (isGame) {
-            session.wlStats.games++;
-            console.log(`[${sessionId.slice(0,8)}] 🎮 GAME! games=${session.wlStats.games}`);
-          }
-
-          io.to(sessionId).emit('wl-update', session.wlStats);
-          console.log(`[${sessionId.slice(0,8)}] 📡 wl-update emitted to overlay`);
+        if (isWin) {
+          session.wlStats.wins++;
+          session.wlStats.games++;
+          console.log(`[${sessionId.slice(0,8)}] 🏆 WIN by @${username} — wins=${session.wlStats.wins} games=${session.wlStats.games}`);
+        } else if (isLoss) {
+          session.wlStats.losses++;
+          session.wlStats.games++;
+          console.log(`[${sessionId.slice(0,8)}] 💀 LOSS by @${username} — losses=${session.wlStats.losses} games=${session.wlStats.games}`);
+        } else if (isGame) {
+          session.wlStats.games++;
+          console.log(`[${sessionId.slice(0,8)}] 🎮 GAME by @${username} — games=${session.wlStats.games}`);
         }
+
+        io.to(sessionId).emit('wl-update', session.wlStats);
+        console.log(`[${sessionId.slice(0,8)}] 📡 wl-update emitted`);
       }
     }
   }
