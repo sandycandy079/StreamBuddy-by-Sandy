@@ -411,47 +411,56 @@ async function handleChatMessage(data, sessionId) {
   console.log(`[${sessionId.slice(0,8)}] 💬 @${username}: ${message}`);
 
   // ✅ W/L keyword detection — only from streamer or moderators
-  const wlConfig = diskConfig.wl || {};
-  if (wlConfig.keywordsEnabled) {
-    const isOwner = username.toLowerCase() === session.tiktokUsername?.toLowerCase();
+  // wl config can be at diskConfig.wl OR diskConfig.overlayConfig.wl (legacy)
+  const wlConfig = diskConfig.wl || diskConfig.overlayConfig?.wl || {};
+
+  console.log(`[${sessionId.slice(0,8)}] 🔍 WL check: enabled=${wlConfig.keywordsEnabled} user=@${username} isMod=${data.isModerator} msg="${message}"`);
+
+  if (wlConfig.keywordsEnabled === true) {
+    const isOwner = username.toLowerCase() === (session.tiktokUsername || '').toLowerCase();
     const isMod = data.isModerator === true;
+
+    console.log(`[${sessionId.slice(0,8)}] 🔍 WL auth: isOwner=${isOwner} isMod=${isMod} streamOwner=@${session.tiktokUsername}`);
+
     if (isOwner || isMod) {
       const msgLower = message.trim().toLowerCase();
-      const winKw = (wlConfig.winKeyword || '').toLowerCase().trim();
+      const winKw  = (wlConfig.winKeyword  || '').toLowerCase().trim();
       const lossKw = (wlConfig.lossKeyword || '').toLowerCase().trim();
       const gameKw = (wlConfig.gameKeyword || '').toLowerCase().trim();
+
+      console.log(`[${sessionId.slice(0,8)}] 🔍 WL keywords: win="${winKw}" loss="${lossKw}" game="${gameKw}" msg="${msgLower}"`);
 
       const isWin  = winKw  && msgLower === winKw;
       const isLoss = lossKw && msgLower === lossKw;
       const isGame = gameKw && msgLower === gameKw;
 
       if (isWin || isLoss || isGame) {
-        // Cooldown check — prevent multiple mods triggering at same time
         const cooldownMs = (wlConfig.keywordCooldown || 3) * 60 * 1000;
         const now = Date.now();
         const lastTrigger = session.wlLastTrigger || 0;
 
         if (now - lastTrigger < cooldownMs) {
           const remaining = Math.ceil((cooldownMs - (now - lastTrigger)) / 1000);
-          console.log(`[${sessionId.slice(0,8)}] ⏱️ W/L keyword cooldown — ${remaining}s remaining`);
+          console.log(`[${sessionId.slice(0,8)}] ⏱️ W/L cooldown active — ${remaining}s remaining, ignoring`);
         } else {
           session.wlLastTrigger = now;
           if (!session.wlStats) session.wlStats = { games: 0, wins: 0, losses: 0 };
 
           if (isWin) {
             session.wlStats.wins++;
-            session.wlStats.games++; // ✅ auto-increment games
-            console.log(`[${sessionId.slice(0,8)}] 🏆 WIN by @${username} — wins=${session.wlStats.wins} games=${session.wlStats.games}`);
+            session.wlStats.games++;
+            console.log(`[${sessionId.slice(0,8)}] 🏆 WIN! wins=${session.wlStats.wins} games=${session.wlStats.games}`);
           } else if (isLoss) {
             session.wlStats.losses++;
-            session.wlStats.games++; // ✅ auto-increment games
-            console.log(`[${sessionId.slice(0,8)}] 💀 LOSS by @${username} — losses=${session.wlStats.losses} games=${session.wlStats.games}`);
+            session.wlStats.games++;
+            console.log(`[${sessionId.slice(0,8)}] 💀 LOSS! losses=${session.wlStats.losses} games=${session.wlStats.games}`);
           } else if (isGame) {
             session.wlStats.games++;
-            console.log(`[${sessionId.slice(0,8)}] 🎮 GAME by @${username} — games=${session.wlStats.games}`);
+            console.log(`[${sessionId.slice(0,8)}] 🎮 GAME! games=${session.wlStats.games}`);
           }
 
           io.to(sessionId).emit('wl-update', session.wlStats);
+          console.log(`[${sessionId.slice(0,8)}] 📡 wl-update emitted to overlay`);
         }
       }
     }
